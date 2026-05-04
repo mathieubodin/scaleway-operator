@@ -89,20 +89,6 @@ subjects:
   namespace: scaleway-system
 
 ---
-# Secret avec les credentials Scaleway
-apiVersion: v1
-kind: Secret
-metadata:
-  name: scaleway-credentials
-  namespace: scaleway-system
-type: Opaque
-data:
-  # À remplir avec vos données encodées en base64
-  # base64 de votre token: echo -n "votre-token" | base64
-  token: "CHANGEME_BASE64_ENCODED_TOKEN"
-  organization_id: "CHANGEME_BASE64_ENCODED_ORG_ID"
-
----
 # Deployment du Opérateur
 apiVersion: apps/v1
 kind: Deployment
@@ -120,9 +106,6 @@ spec:
     metadata:
       labels:
         app: scaleway-operator
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
     spec:
       serviceAccountName: scaleway-operator
       securityContext:
@@ -137,16 +120,16 @@ spec:
           valueFrom:
             secretKeyRef:
               name: scaleway-credentials
-              key: token
+              key: SCALEWAY_TOKEN
         - name: SCALEWAY_ORG_ID
           valueFrom:
             secretKeyRef:
               name: scaleway-credentials
-              key: organization_id
+              key: SCALEWAY_ORG_ID
         - name: RUST_LOG
           value: "info,scaleway_operator=debug"
         ports:
-        - name: metrics
+        - name: health
           containerPort: 8080
           protocol: TCP
         resources:
@@ -164,16 +147,16 @@ spec:
             - ALL
         livenessProbe:
           httpGet:
-            path: /health
+            path: /
             port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
+          initialDelaySeconds: 15
+          periodSeconds: 30
         readinessProbe:
           httpGet:
-            path: /ready
+            path: /
             port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 5
+          initialDelaySeconds: 5
+          periodSeconds: 10
 
 ---
 # Service pour les métriques Prometheus (optionnel)
