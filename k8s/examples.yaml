@@ -1,0 +1,109 @@
+---
+# Namespace production avec annotation du projet Scaleway
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  annotations:
+    scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
+    description: "Production namespace pour instances Scaleway"
+
+---
+# Namespace development avec annotation du projet
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+  annotations:
+    scaleway.io/project-id: "87654321-4321-4321-4321-210987654321"
+    description: "Development namespace pour instances Scaleway"
+
+---
+# Exemple 1: Instance simple en production
+apiVersion: scaleway.io/v1
+kind: Instance
+metadata:
+  name: web-server
+  namespace: production  # ← Utilise l'annotation du namespace
+spec:
+  name: web-server-prod
+  zone: fr-par-1
+  image: ubuntu-jammy
+  instance_type: GP1-M
+  tags:
+    - prod
+    - web
+
+---
+# Exemple 2: Instance database en production
+apiVersion: scaleway.io/v1
+kind: Instance
+metadata:
+  name: database-server
+  namespace: production
+spec:
+  name: postgresql-prod
+  zone: fr-par-1
+  image: debian-12
+  instance_type: GP1-L
+  boot_volume_size: 100
+  network:
+    public_ip: false
+    enable_ipv6: true
+  security:
+    enable_firewall: true
+  tags:
+    - database
+    - prod
+
+---
+# Exemple 3: Instance dev légère
+apiVersion: scaleway.io/v1
+kind: Instance
+metadata:
+  name: dev-box
+  namespace: development  # ← Utilise l'annotation du namespace dev
+spec:
+  name: dev-testing
+  zone: fr-par-1
+  image: ubuntu-jammy
+  instance_type: DEV1-S
+  tags:
+    - dev
+    - testing
+
+---
+# Exemple 4: Instance dans une autre région
+apiVersion: scaleway.io/v1
+kind: Instance
+metadata:
+  name: eu-instance
+  namespace: production
+spec:
+  name: europe-server
+  zone: nl-ams-1
+  image: ubuntu-jammy
+  instance_type: GP1-S
+  tags:
+    - europe
+    - prod
+
+---
+# Exemple 5: Instance sans annotation namespace (devrait échouer)
+# Décommentez pour tester l'erreur
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#   name: no-annotation
+# ---
+# apiVersion: scaleway.io/v1
+# kind: Instance
+# metadata:
+#   name: will-fail
+#   namespace: no-annotation
+# spec:
+#   name: this-will-fail
+#   zone: fr-par-1
+#   image: ubuntu-jammy
+#   instance_type: DEV1-S
+# # Cette instance échouera : le namespace n'a pas l'annotation scaleway.io/project-id

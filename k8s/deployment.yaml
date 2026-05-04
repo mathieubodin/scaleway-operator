@@ -1,0 +1,194 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scaleway-system
+  labels:
+    app: scaleway-operator
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scaleway-operator
+  namespace: scaleway-system
+
+---
+# ClusterRole pour gérer les ressources Scaleway et les secrets
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaleway-operator
+rules:
+# CRDs Scaleway
+- apiGroups: ["scaleway.io"]
+  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["scaleway.io"]
+  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
+  verbs: ["update"]
+# NamespaceRole (cluster-wide resource)
+- apiGroups: ["scaleway.io"]
+  resources: ["namespaceroles"]
+  verbs: ["get", "list", "watch"]
+# ConfigMaps pour la configuration
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+# Namespaces pour lire les annotations et les NamespaceRoles
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+# Logging des événements
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scaleway-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scaleway-operator
+subjects:
+- kind: ServiceAccount
+  name: scaleway-operator
+  namespace: scaleway-system
+
+---
+# Role scopé à scaleway-system pour gérer les Secrets de credentials IAM par namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaleway-operator-secrets
+  namespace: scaleway-system
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaleway-operator-secrets
+  namespace: scaleway-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaleway-operator-secrets
+subjects:
+- kind: ServiceAccount
+  name: scaleway-operator
+  namespace: scaleway-system
+
+---
+# Secret avec les credentials Scaleway
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scaleway-credentials
+  namespace: scaleway-system
+type: Opaque
+data:
+  # À remplir avec vos données encodées en base64
+  # base64 de votre token: echo -n "votre-token" | base64
+  token: "CHANGEME_BASE64_ENCODED_TOKEN"
+  organization_id: "CHANGEME_BASE64_ENCODED_ORG_ID"
+
+---
+# Deployment du Opérateur
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaleway-operator
+  namespace: scaleway-system
+  labels:
+    app: scaleway-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scaleway-operator
+  template:
+    metadata:
+      labels:
+        app: scaleway-operator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: scaleway-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: operator
+        image: scaleway-operator:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SCALEWAY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: scaleway-credentials
+              key: token
+        - name: SCALEWAY_ORG_ID
+          valueFrom:
+            secretKeyRef:
+              name: scaleway-credentials
+              key: organization_id
+        - name: RUST_LOG
+          value: "info,scaleway_operator=debug"
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Service pour les métriques Prometheus (optionnel)
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaleway-operator-metrics
+  namespace: scaleway-system
+  labels:
+    app: scaleway-operator
+spec:
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: scaleway-operator

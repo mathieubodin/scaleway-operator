@@ -1,0 +1,68 @@
+---
+# Exemple 1: Assigner le rôle Editor au namespace production
+# Convention: le nom du NamespaceRole doit être le même que le namespace
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: production  # Doit correspondre au namespace "production"
+spec:
+  namespace: production
+  scaleway_role: Editor  # L'opérateur assumera ce rôle pour les ressources de ce namespace
+  description: "Production namespace - Editor role for operators"
+
+---
+# Exemple 2: Assigner le rôle Viewer au namespace development (lecture seule)
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: development
+spec:
+  namespace: development
+  scaleway_role: Viewer  # Lecture seule - ne peut pas créer/modifier/supprimer
+  description: "Development namespace - Viewer role (read-only)"
+
+---
+# Exemple 3: Assigner le rôle Admin au namespace admin
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: admin
+spec:
+  namespace: admin
+  scaleway_role: Admin  # Accès complet
+  description: "Admin namespace - Full access"
+
+---
+# Exemple 4: Assigner le rôle SecurityResponsible au namespace security
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: security
+spec:
+  namespace: security
+  scaleway_role: SecurityResponsible
+  description: "Security namespace - Security responsibility role"
+
+---
+# Exemple 5: Namespace sans NamespaceRole (va échouer à créer une instance)
+# Si vous oubliez de créer le NamespaceRole, la création échouera:
+# "No NamespaceRole found for namespace 'no-role-namespace'"
+# 
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#   name: no-role-namespace
+#   annotations:
+#     scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
+# ---
+# apiVersion: scaleway.io/v1
+# kind: Instance
+# metadata:
+#   name: will-fail
+#   namespace: no-role-namespace
+# spec:
+#   name: this-will-fail
+#   zone: fr-par-1
+#   image: ubuntu-jammy
+#   instance_type: DEV1-S
+# # Cette instance échouera : aucun NamespaceRole pour ce namespace
