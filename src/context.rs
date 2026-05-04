@@ -7,6 +7,7 @@ pub struct Context {
     pub client: Client,
     pub scaleway_client: ScalewayClient,
     pub organization_id: String,
+    pub scaleway_base_url: String,
 }
 
 /// Extraire le project_id depuis une annotation de namespace

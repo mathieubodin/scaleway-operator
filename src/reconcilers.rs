@@ -52,7 +52,10 @@ async fn get_namespace_client(ctx: &Arc<Context>, namespace: &str) -> Result<Sca
             })
         })?;
 
-    Ok(ScalewayClient::new(secret_key))
+    Ok(ScalewayClient::new_with_base_url(
+        secret_key,
+        ctx.scaleway_base_url.clone(),
+    ))
 }
 
 /// Récupérer le project_id depuis l'annotation du namespace

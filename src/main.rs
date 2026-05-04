@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client: client.clone(),
         scaleway_client: ScalewayClient::new(scaleway_token),
         organization_id,
+        scaleway_base_url: "https://api.scaleway.com".to_string(),
     });
 
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");
