@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Environment
+.env
+.env.local
+
+# Compound engineering
+.context/compound-engineering
+docs/ideation
+docs/plans
+NAMESPACE_PROJECTS.md
+NAMESPACE_ROLES.md
+QUICKSTART.md
+SETUP.md
+.compound-engineering/config.local*.yaml
