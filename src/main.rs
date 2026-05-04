@@ -1,18 +1,13 @@
-mod context;
-mod error;
-mod reconcilers;
-mod resources;
-mod scaleway;
-
 use futures::StreamExt;
 use kube::runtime::Controller;
 use kube::{Api, Client};
+use scaleway_operator::{
+    context::Context,
+    reconcilers::{error_policy, reconcile_instance},
+    resources::Instance,
+    scaleway::ScalewayClient,
+};
 use std::sync::Arc;
-
-use context::Context;
-use reconcilers::{error_policy, reconcile_instance};
-use resources::Instance;
-use scaleway::ScalewayClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
