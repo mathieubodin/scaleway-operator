@@ -74,6 +74,7 @@ check: check-cargo ## Lint et format
 	cargo fmt
 	cargo clippy -- -D warnings
 	cargo check
+	markdownlint-cli2
 
 image-build: ## Construit l'image
 	docker build -t $(FULL_IMAGE) .

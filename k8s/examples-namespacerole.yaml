@@ -42,27 +42,3 @@ spec:
   namespace: security
   scaleway_role: SecurityResponsible
   description: "Security namespace - Security responsibility role"
-
----
-# Exemple 5: Namespace sans NamespaceRole (va échouer à créer une instance)
-# Si vous oubliez de créer le NamespaceRole, la création échouera:
-# "No NamespaceRole found for namespace 'no-role-namespace'"
-# 
-# apiVersion: v1
-# kind: Namespace
-# metadata:
-#   name: no-role-namespace
-#   annotations:
-#     scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
-# ---
-# apiVersion: scaleway.io/v1
-# kind: Instance
-# metadata:
-#   name: will-fail
-#   namespace: no-role-namespace
-# spec:
-#   name: this-will-fail
-#   zone: fr-par-1
-#   image: ubuntu-jammy
-#   instance_type: DEV1-S
-# # Cette instance échouera : aucun NamespaceRole pour ce namespace

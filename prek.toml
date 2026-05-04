@@ -1,0 +1,52 @@
+exclude = {
+    glob = [
+        "target/**",
+        "docs/ideation/**",
+        "docs/plans/**"
+    ]
+}
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    {
+        id = "trailing-whitespace"
+    },
+    {
+        id   = "end-of-file-fixer",
+        args = ["--fix"]
+    },
+    {
+        id   = "mixed-line-ending",
+        args = ["--fix", "lf"]
+    },
+    {
+        id   = "check-yaml",
+        args = ["--allow-multiple-documents"]
+    },
+    {
+        id = "check-json"
+    },
+    {
+        id = "check-toml"
+    },
+    {
+        id = "check-executables-have-shebangs"
+    },
+    {
+        id = "check-shebang-scripts-are-executable"
+    },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    {
+        id             = "lint-format",
+        name           = "Lint & format",
+        entry          = "make check",
+        language       = "system",
+        shell          = "bash",
+        pass_filenames = false
+    }
+]

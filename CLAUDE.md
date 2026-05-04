@@ -23,9 +23,14 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
 
 ### Modules
 
-- **`main.rs`** — Initialise le tracing, lit les variables d'environnement (`SCALEWAY_TOKEN`, `SCALEWAY_ORG_ID`, `SCALEWAY_PROJECT_ID`), construit le `Context` partagé et lance le `Controller` kube-rs sur la ressource `Instance`.
-- **`resources.rs`** — Définit les CRDs via la macro `#[derive(CustomResource)]` : `Instance`, `Project`, `LoadBalancer`, `NamespaceRole` (cluster-wide).
-- **`context.rs`** — Struct `Context` partagé entre les réconciliateurs. Contient aussi les helpers pour extraire les annotations de namespace (`scaleway.io/project-id`, `scaleway.io/organization-id`) et `get_scaleway_role_for_namespace` qui cherche la ressource `NamespaceRole` par nom de namespace.
+- **`main.rs`**:
+      - Initialise le tracing
+      - Lit les variables d'environnement (`SCALEWAY_TOKEN`, `SCALEWAY_ORG_ID`, `SCALEWAY_PROJECT_ID`)
+      - Construit le `Context` partagé
+      - Lance le `Controller` kube-rs sur la ressource `Instance`.
+- **`resources.rs`**: Définit les CRDs via la macro `#[derive(CustomResource)]` : `Instance`, `Project`, `LoadBalancer`, `NamespaceRole` (cluster-wide).
+- **`context.rs`**: Struct `Context` partagé entre les réconciliateurs.
+    Contient aussi les helpers pour extraire les annotations de namespace (`scaleway.io/project-id`, `scaleway.io/organization-id`) et `get_scaleway_role_for_namespace` qui cherche la ressource `NamespaceRole` par nom de namespace.
 - **`reconcilers.rs`** — `reconcile_instance` : logique de réconciliation en 9 étapes (rôle namespace → project_id → finalizer → validation → create/sync). `error_policy` requeue après 60s en cas d'erreur.
 - **`scaleway.rs`** — `ScalewayClient` wrappant `reqwest`. Appels REST à `https://api.scaleway.com`. Authentification via header `X-Auth-Token`.
 - **`error.rs`** — `OperatorError` enum avec `thiserror`, couvrant les erreurs kube, Scaleway, réseau et configuration.
@@ -44,10 +49,10 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
 
 ### Variables d'environnement requises
 
-| Variable | Obligatoire | Description |
-|---|---|---|
-| `SCALEWAY_TOKEN` | Oui | Token API Scaleway (nécessite `InstancesFullAccess` + `ProjectReadOnly`) |
-| `SCALEWAY_ORG_ID` | Oui | ID de l'organisation |
+| Variable          | Obligatoire | Description                                                              |
+|-------------------|-------------|--------------------------------------------------------------------------|
+| `SCALEWAY_TOKEN`  | Oui         | Token API Scaleway (nécessite `InstancesFullAccess` + `ProjectReadOnly`) |
+| `SCALEWAY_ORG_ID` | Oui         | ID de l'organisation                                                     |
 
 ### Prérequis namespace
 

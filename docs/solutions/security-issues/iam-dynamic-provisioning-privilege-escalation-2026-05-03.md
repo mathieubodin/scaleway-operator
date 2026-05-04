@@ -25,7 +25,8 @@ tags:
 
 ## Problem
 
-L'opérateur créait dynamiquement des IAM Applications, Policies et API Keys Scaleway au moment de la réconciliation. Cette approche requiert que le token global de l'opérateur dispose de la permission `IAMManager` (org-scope), ce qui lui permet de s'octroyer n'importe quelle permission Scaleway — une faille de privilege escalation.
+L'opérateur créait dynamiquement des IAM Applications, Policies et API Keys Scaleway au moment de la réconciliation.
+Cette approche requiert que le token global de l'opérateur dispose de la permission `IAMManager` (org-scope)ce qui lui permet de s'octroyer n'importe quelle permission Scaleway — une faille de privilege escalation.
 
 ## Symptoms
 
@@ -35,7 +36,8 @@ L'opérateur créait dynamiquement des IAM Applications, Policies et API Keys Sc
 
 ## What Didn't Work
 
-Le problème n'a pas été détecté lors de l'implémentation initiale du pattern NamespaceRole : le provisionnement dynamique semblait être le moyen naturel d'associer des credentials scopés à chaque namespace. Ce n'est qu'en questionnant les permissions réellement requises (`IAMManager` vs `IAMApplicationManager` + `IAMPolicyManager`) que la faille de conception a été identifiée : un opérateur qui peut créer des policies IAM est son propre administrateur de sécurité.
+Le problème n'a pas été détecté lors de l'implémentation initiale du pattern NamespaceRole : le provisionnement dynamique semblait être le moyen naturel d'associer des credentials scopés à chaque namespace.
+Ce n'est qu'en questionnant les permissions réellement requises (`IAMManager` vs `IAMApplicationManager` + `IAMPolicyManager`) que la faille de conception a été identifiée : un opérateur qui peut créer des policies IAM est son propre administrateur de sécurité.
 
 ## Solution
 
@@ -97,6 +99,7 @@ async fn get_namespace_client(
 ```
 
 **Supprimé de `scaleway.rs` :**
+
 - `find_iam_application_by_name`
 - `find_iam_policy_by_application`
 - `create_iam_application`
@@ -106,10 +109,10 @@ async fn get_namespace_client(
 
 **Permissions requises après le fix :**
 
-| Permission | Scope | Raison |
-|---|---|---|
-| `InstancesFullAccess` | projet | Créer/supprimer/lire les instances |
-| `ProjectReadOnly` | organisation | Vérifier l'accès au projet |
+| Permission            | Scope        | Raison                             |
+|-----------------------|--------------|------------------------------------|
+| `InstancesFullAccess` | projet       | Créer/supprimer/lire les instances |
+| `ProjectReadOnly`     | organisation | Vérifier l'accès au projet         |
 
 Zero permission IAM pour le token global de l'opérateur.
 
@@ -126,7 +129,9 @@ L'IAM Application + Policy + API Key sont créées une fois par un admin (Terraf
 
 ## Why This Works
 
-Un opérateur qui ne peut que lire des Secrets Kubernetes ne peut pas s'octroyer de permissions supplémentaires. La création de credentials IAM reste sous contrôle humain (admin cluster ou pipeline IaC), hors de portée d'un pod compromis. Le modèle de menace passe de "l'opérateur peut devenir admin Scaleway" à "l'opérateur peut lire les Secrets qu'un admin lui a explicitement accordés".
+Un opérateur qui ne peut que lire des Secrets Kubernetes ne peut pas s'octroyer de permissions supplémentaires.
+La création de credentials IAM reste sous contrôle humain (admin cluster ou pipeline IaC), hors de portée d'un pod compromis.
+Le modèle de menace passe de "l'opérateur peut devenir admin Scaleway" à "l'opérateur peut lire les Secrets qu'un admin lui a explicitement accordés".
 
 ## Prevention
 

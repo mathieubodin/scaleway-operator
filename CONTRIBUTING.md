@@ -22,51 +22,25 @@ cargo --version
 
 ### Commandes de développement
 
-| Commande | Description |
-|---|---|
-| `cargo build --release` | Compile le binaire |
-| `cargo test` | Lance tous les tests |
-| `cargo test <nom>` | Lance un test spécifique |
-| `cargo fmt` | Formate le code |
-| `cargo clippy -- -D warnings` | Lint strict |
-| `make check` | fmt + clippy + cargo check en une commande |
-| `make coverage` | Rapport de couverture HTML |
-| `make coverage-open` | Rapport de couverture + ouverture navigateur |
-
-### Prérequis optionnels
-
-**Coverage de tests** (`make coverage`) :
-
-```bash
-rustup component add llvm-tools
-cargo install cargo-llvm-cov
-```
-
-Le rapport HTML est généré dans `target/llvm-cov/html/index.html`.
-
-**Déploiement Kubernetes** (`make deploy`, `make logs`) :
-
-```bash
-# kubectl >= 1.24
-# https://kubernetes.io/docs/tasks/tools/
-kubectl version --client
-```
-
-**Build Docker** (`make docker-build`) :
-
-```bash
-# Docker Engine ou Docker Desktop
-docker --version
-```
+- Tester la conformite de l'environnement : `make env-check`
+- Tester l'application                    : `make coverage`
+- Construire le binaire                   : `make build`
+- Lint et format                          : `make check`
+- Nettoyer les artefacts                  : `make clean`
+- Construire l'image                      : `make image-build`
+- Distribuer l'image                      : `make image-push`
+- Deployer les CRDS                       : `make deploy-crd`
+- Deployer la stack operateur             : `make deploy`
+- Verifier l'etat du deploiement          : `make deploy-status`
 
 ### Variables d'environnement
 
-Requises uniquement pour exécuter l'opérateur (pas pour `cargo test`) :
+Requises uniquement pour exécuter l'opérateur :
 
-| Variable | Obligatoire | Description |
-|---|---|---|
-| `SCALEWAY_TOKEN` | Oui | Token API Scaleway |
-| `SCALEWAY_ORG_ID` | Oui | ID de l'organisation Scaleway |
+| Variable          | Obligatoire | Description                   |
+|-------------------|-------------|-------------------------------|
+| `SCALEWAY_TOKEN`  | Oui         | Token API Scaleway            |
+| `SCALEWAY_ORG_ID` | Oui         | ID de l'organisation Scaleway |
 
 ## 🐛 Signaler un bug
 
@@ -93,9 +67,8 @@ Requises uniquement pour exécuter l'opérateur (pas pour `cargo test`) :
 
 ## 📋 Checklist avant de soumettre une PR
 
-- [ ] Code formaté (`cargo fmt`)
-- [ ] Pas de warnings clippy (`cargo clippy`)
-- [ ] Tests ajoutés/passent (`cargo test`)
+- [ ] Code formaté, pas de warnings clippy (`make check`)
+- [ ] Tests ajoutés/passent (`make coverage`)
 - [ ] Documentation à jour
 - [ ] Commit messages clairs et descriptifs
 - [ ] Pas de dépendances non nécessaires ajoutées
@@ -112,13 +85,13 @@ fn my_function(param: String) -> Result<String> {
 }
 ```
 
-- Utilisez `cargo fmt` pour formater
-- Respectez les avertissements de `cargo clippy`
+- Utilisez `make check` pour formater
+- Respectez les avertissements de `make check`
 - Documentez avec des doc comments (`///`)
 
 ### Commits
 
-```
+```text
 Add support for LoadBalancer resources
 
 - Implement LoadBalancer CRD
@@ -126,19 +99,6 @@ Add support for LoadBalancer resources
 - Add reconciliation logic
 
 Fixes #123
-```
-
-## 🧪 Tests
-
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Run specific test
-cargo test test_name
 ```
 
 ## 📖 Documentation

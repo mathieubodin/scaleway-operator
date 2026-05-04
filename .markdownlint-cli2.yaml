@@ -1,0 +1,17 @@
+fix: true
+gitignore: true
+noBanner: true
+noProgress: true
+globs:
+  - "**/*.md"
+config:
+  MD001:
+    front_matter_title: ""
+  MD013:
+    line_length: 280
+    heading_line_length: 180
+    code_block_line_length: 180
+    code_blocks: false
+    tables: false
+  MD025:
+    front_matter_title: ""

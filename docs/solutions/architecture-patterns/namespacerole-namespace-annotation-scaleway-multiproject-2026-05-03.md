@@ -28,9 +28,11 @@ tags:
 
 Dans un opérateur Kubernetes multi-tenant gérant des ressources Scaleway, deux frictions architecturales se posent rapidement :
 
-**Friction 1 — La répétition du `project_id`.** Sans convention centralisée, chaque ressource `Instance` devrait déclarer son `project_id` dans sa `spec`. En environnement multi-équipe, cela crée de la duplication, des erreurs de copier-coller, et rend difficile la réaffectation d'un namespace vers un projet Scaleway différent.
+**Friction 1 — La répétition du `project_id`.** Sans convention centralisée, chaque ressource `Instance` devrait déclarer son `project_id` dans sa `spec`.
+    En environnement multi-équipe, cela crée de la duplication, des erreurs de copier-coller, et rend difficile la réaffectation d'un namespace vers un projet Scaleway différent.
 
-**Friction 2 — L'absence de contrôle de permission par tenant.** L'opérateur dispose d'un token Scaleway global (admin). Sans gouvernance, toute équipe déployant dans n'importe quel namespace peut déclencher des appels API avec les permissions complètes. Il n'y a pas de moyen d'exprimer qu'un namespace de développement ne doit avoir accès qu'en lecture, ou qu'un namespace de production peut créer des instances mais pas modifier l'IAM.
+**Friction 2 — L'absence de contrôle de permission par tenant.** L'opérateur dispose d'un token Scaleway global (admin). Sans gouvernance, toute équipe déployant dans n'importe quel namespace peut déclencher des appels API avec les permissions complètes.
+    Il n'y a pas de moyen d'exprimer qu'un namespace de développement ne doit avoir accès qu'en lecture, ou qu'un namespace de production peut créer des instances mais pas modifier l'IAM.
 
 Ces deux problèmes sont résolus par des conventions portées par des primitives Kubernetes natives — annotations et CRDs — plutôt que par de la configuration dans la `spec` des ressources métier.
 
@@ -78,7 +80,8 @@ if uuid::Uuid::parse_str(&pid).is_err() {
 
 ### Pattern 2 : CRD `NamespaceRole` cluster-wide
 
-La CRD `NamespaceRole` est une ressource cluster-wide (non-namespaced) dont **le nom de la ressource est identique au nom du namespace** qu'elle configure. Cette convention élimine tout champ de sélecteur : le lookup se fait directement par `api.get(namespace_name)`.
+La CRD `NamespaceRole` est une ressource cluster-wide (non-namespaced) dont **le nom de la ressource est identique au nom du namespace** qu'elle configure.
+Cette convention élimine tout champ de sélecteur : le lookup se fait directement par `api.get(namespace_name)`.
 
 **Struct Rust (`src/resources.rs`) :**
 
@@ -161,11 +164,13 @@ fn role_allows_write(role: &str) -> bool {
 
 ## Why This Matters
 
-**Isolation du périmètre de permission.** Plutôt qu'un token global avec accès admin sur toute l'organisation, chaque namespace dispose de credentials IAM Scaleway dédiés, provisionnés à la volée et bornés aux `permission_sets` correspondant à son rôle. Un namespace `Viewer` ne peut pas créer d'instances, même si un développeur modifie la `spec` d'une `Instance`.
+**Isolation du périmètre de permission.** Plutôt qu'un token global avec accès admin sur toute l'organisation, chaque namespace dispose de credentials IAM Scaleway dédiés, provisionnés à la volée et bornés aux `permission_sets` correspondant à son rôle.
+    Un namespace `Viewer` ne peut pas créer d'instances, même si un développeur modifie la `spec` d'une `Instance`.
 
 **Convention over configuration.** Le lookup `api.get(namespace)` est O(1) et sans ambiguïté : un namespace, un `NamespaceRole`, une résolution. Pas de label selector, pas de champ de référence à synchroniser.
 
-**Séparation des préoccupations multi-tenant.** Le `project_id` et le rôle IAM relèvent de la gouvernance de la plateforme (opérateur cluster-admin), pas des équipes applicatives. En les portant sur des objets cluster-wide (`NamespaceRole`) ou des annotations namespace, on préserve cette frontière.
+**Séparation des préoccupations multi-tenant.** Le `project_id` et le rôle IAM relèvent de la gouvernance de la plateforme (opérateur cluster-admin), pas des équipes applicatives.
+    En les portant sur des objets cluster-wide (`NamespaceRole`) ou des annotations namespace, on préserve cette frontière.
 
 **Fail-fast sur configuration manquante.** Les deux lookups sont des préconditions non-nullables. Une `ConfigError` déclenche `Action::await_change()` (pas de requeue temporisé) : le cluster ne consomme pas de ressources à retenter une configuration structurellement incorrecte.
 
@@ -244,8 +249,10 @@ Toute `Instance` dans ce namespace sera bloquée à la création avec :
 ## Ce qui n'a pas marché (session history)
 
 - **Import incorrect du type `Namespace`** — Le premier code utilisait `kube::api::v1::Namespace` qui n'existe pas dans kube-rs. Le chemin correct est `k8s_openapi::api::core::v1::Namespace`. Cette erreur bloquait la compilation. (session history)
-- **`scaleway_role` lu mais non appliqué** — La version initiale lisait le champ `scaleway_role` depuis `NamespaceRole` mais continuait à utiliser le `ScalewayClient` global de l'opérateur sans tenir compte du rôle. Identifié comme bypass de sécurité critique en revue de code multi-persona, puis corrigé en introduisant `get_or_provision_namespace_client`. (session history)
-- **Appels IAM Scaleway en 404** — Pendant la phase d'implémentation IAM, des appels `find_iam_application_by_name` retournaient 404 (l'application n'existait pas encore). Des cas limites produisaient des erreurs silencieuses menant à des créations dupliquées d'Applications orphelines. Résolu en gérant explicitement les 409 (race condition) avec un re-lookup plutôt qu'une propagation d'erreur. (session history)
+- **`scaleway_role` lu mais non appliqué** — La version initiale lisait le champ `scaleway_role` depuis `NamespaceRole` mais continuait à utiliser le `ScalewayClient` global de l'opérateur sans tenir compte du rôle.
+    Identifié comme bypass de sécurité critique en revue de code multi-persona, puis corrigé en introduisant `get_or_provision_namespace_client`. (session history)
+- **Appels IAM Scaleway en 404** — Pendant la phase d'implémentation IAM, des appels `find_iam_application_by_name` retournaient 404 (l'application n'existait pas encore).
+    Des cas limites produisaient des erreurs silencieuses menant à des créations dupliquées d'Applications orphelines. Résolu en gérant explicitement les 409 (race condition) avec un re-lookup plutôt qu'une propagation d'erreur. (session history)
 
 ## Related
 

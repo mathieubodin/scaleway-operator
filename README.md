@@ -266,6 +266,7 @@ Le `scaleway_role` du `NamespaceRole` est un rôle en lecture seule. Utilisez `E
 ### Erreur: "Invalid zone" ou "Invalid instance type"
 
 Zones valides :
+
 - `fr-par-1`, `fr-par-2` (Paris)
 - `nl-ams-1` (Amsterdam)
 - `pl-waw-1` (Varsovie)
@@ -273,6 +274,7 @@ Zones valides :
 - `it-mil-1` (Milan)
 
 Types valides :
+
 - `DEV1-S`, `DEV1-M`, `DEV1-L`, `DEV1-XL` (développement)
 - `GP1-XS`, `GP1-S`, `GP1-M`, `GP1-L`, `GP1-XL` (généraliste)
 - `CPU1-XS`, `CPU1-S`, `CPU1-M`, `CPU1-L` (CPU optimisé)
@@ -280,7 +282,7 @@ Types valides :
 
 ## 🏗️ Architecture
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │   Kubernetes Cluster                    │
 │  ┌──────────────────────────────────┐   │
@@ -299,7 +301,7 @@ Types valides :
 
 ## 📝 Structure du code
 
-```
+```text
 scaleway-operator/
 ├── src/
 │   ├── main.rs          # Point d'entrée
@@ -365,6 +367,7 @@ Les contributions sont bienvenues ! N'hésitez pas à ouvrir des issues ou PRs.
 ## 📞 Support
 
 Pour toute question ou problème :
+
 1. Vérifiez la documentation ci-dessus
 2. Consultez les logs de l'opérateur
 3. Ouvrez une issue sur le dépôt
@@ -378,8 +381,5 @@ Pour toute question ou problème :
 
 ### From 2026-05-03 review
 
-- **[P0] Installation — k8s/ est vide** : Aucun des fichiers YAML référencés (`crd-instance.yaml`, `crd-namespacerole.yaml`, `deployment.yaml`) n'existe dans le dépôt. Les manifests CRD doivent être générés depuis les macros kube-rs (`#[derive(CustomResource)]`) et committés. Le `deployment.yaml` doit également être créé avec l'injection `secretKeyRef` des variables d'environnement. À résoudre avant toute installation réelle.
-
-- **[P3] CRDs — `LoadBalancerSpec` défini mais non documenté** : `resources.rs` définit une CRD `LoadBalancer` (loadbalancers.scaleway.io) mais elle n'est ni réconciliée ni mentionnée dans la documentation. À documenter comme "définie mais pas encore réconciliée" ou à supprimer si non planifiée.
-
-- **[P3] Prérequis — Pas de recommendation de service account dédié** : L'opérateur peut utiliser un token personnel ou une IAM Application Scaleway. Une IAM Application dédiée est préférable (scope minimal, révocation sans impact sur l'utilisateur). À préciser dans les prérequis.
+- **[P3] Prérequis — Pas de recommendation de service account dédié** : L'opérateur peut utiliser un token personnel ou une IAM Application Scaleway.
+    Une IAM Application dédiée est préférable (scope minimal, révocation sans impact sur l'utilisateur). À préciser dans les prérequis.
