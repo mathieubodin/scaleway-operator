@@ -33,6 +33,31 @@ cargo --version
 - Deployer la stack operateur             : `make deploy`
 - Verifier l'etat du deploiement          : `make deploy-status`
 
+### Tests d'intégration
+
+Les tests d'intégration vérifient le réconciliateur contre un vrai API server Kubernetes avec l'API Scaleway mockée.
+
+**Prérequis :**
+
+- Cluster Kubernetes local accessible via kubeconfig (kubectl proxy, k3d, ou kind)
+- CRDs installées : `make deploy-crd`
+
+**Lancer les tests :**
+
+```bash
+make test-integration
+```
+
+**Variables d'environnement :** aucune variable Scaleway n'est requise — l'API Scaleway est mockée.
+
+**Nettoyage manuel** (si un test a planté et laissé des ressources) :
+
+```bash
+kubectl delete ns -l app.kubernetes.io/managed-by=scaleway-operator-test
+```
+
+> `make coverage-json` et `make test` n'exécutent **pas** les tests d'intégration (ils sont marqués `#[ignore]`).
+
 ### Variables d'environnement
 
 Requises uniquement pour exécuter l'opérateur :
