@@ -39,13 +39,21 @@ Les tests d'intégration vérifient le réconciliateur contre un vrai API server
 
 **Prérequis :**
 
-- Cluster Kubernetes local accessible via kubeconfig (kubectl proxy, k3d, ou kind)
+- API Kubernetes accessible — via `kubectl proxy` (recommandé) ou kubeconfig direct
 - CRDs installées : `make deploy-crd`
 
-**Lancer les tests :**
+**Avec `kubectl proxy` (défaut) :**
 
 ```bash
-make test-integration
+kubectl proxy &          # expose l'API sur http://localhost:8001
+make deploy-crd
+make test-integration    # KUBE_API_URL=http://127.0.0.1:8001 par défaut
+```
+
+**Avec un cluster direct (kubeconfig standard) :**
+
+```bash
+KUBE_API_URL="" make test-integration   # utilise Client::try_default() via kubeconfig
 ```
 
 **Variables d'environnement :** aucune variable Scaleway n'est requise — l'API Scaleway est mockée.

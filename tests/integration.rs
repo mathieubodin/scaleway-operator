@@ -10,6 +10,25 @@ use scaleway_operator::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// Crée un kube::Client en respectant la variable d'environnement KUBE_API_URL.
+/// Quand kubectl proxy tourne sur localhost:8001, définir :
+///   KUBE_API_URL=http://127.0.0.1:8001
+/// Sans cette variable, Client::try_default() utilise le kubeconfig courant.
+async fn make_client() -> Client {
+    match std::env::var("KUBE_API_URL") {
+        Ok(url) => {
+            let config = kube::Config::new(
+                url.parse()
+                    .unwrap_or_else(|_| panic!("KUBE_API_URL is not a valid URI: {}", url)),
+            );
+            Client::try_from(config).expect("Failed to build client from KUBE_API_URL")
+        }
+        Err(_) => Client::try_default()
+            .await
+            .expect("Cannot connect to Kubernetes — set KUBE_API_URL=http://127.0.0.1:8001 when using kubectl proxy, or ensure kubeconfig points to a reachable cluster"),
+    }
+}
+
 const TEST_PROJECT_ID: &str = "11111111-1111-1111-1111-111111111111";
 const SCALEWAY_SYSTEM_NS: &str = "scaleway-system";
 const INSTANCE_FINALIZER: &str = "scaleway.io/instance-finalizer";
@@ -25,9 +44,7 @@ pub struct TestFixture {
 
 impl TestFixture {
     pub async fn new() -> Self {
-        let client = Client::try_default().await.expect(
-            "Cannot connect to Kubernetes — run `make deploy-crd` and ensure kubeconfig is set",
-        );
+        let client = make_client().await;
 
         let ns = format!("test-scw-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
@@ -63,9 +80,7 @@ impl TestFixture {
 
     /// Crée le namespace sans l'annotation scaleway.io/project-id.
     pub async fn new_without_annotation() -> Self {
-        let client = Client::try_default()
-            .await
-            .expect("Cannot connect to Kubernetes");
+        let client = make_client().await;
 
         let ns = format!("test-scw-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
@@ -94,9 +109,7 @@ impl TestFixture {
 
     /// Crée le namespace avec une annotation project-id dont la valeur n'est pas un UUID.
     pub async fn new_with_invalid_annotation() -> Self {
-        let client = Client::try_default()
-            .await
-            .expect("Cannot connect to Kubernetes");
+        let client = make_client().await;
 
         let ns = format!("test-scw-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 

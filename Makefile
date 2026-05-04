@@ -63,8 +63,10 @@ build: check-cargo ## Construire le binaire
 test: check-cargo
 	cargo test
 
-test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crd + cluster local)
-	cargo test --test integration -- --ignored
+KUBE_API_URL ?= http://127.0.0.1:8001
+
+test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crd + kubectl proxy sur :8001)
+	KUBE_API_URL=$(KUBE_API_URL) cargo test --test integration -- --ignored
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport JSON
 	cargo llvm-cov --html 2>/dev/null
