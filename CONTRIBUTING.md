@@ -35,33 +35,55 @@ cargo --version
 
 ### Tests d'intégration
 
-Les tests d'intégration vérifient le réconciliateur contre un vrai API server Kubernetes avec l'API Scaleway mockée.
+Les tests d'intégration vérifient `reconcile_instance` contre un vrai API server Kubernetes avec l'API Scaleway mockée (mockito).
 
-**Prérequis :**
+#### Architecture des tests
 
-- API Kubernetes accessible — via `kubectl proxy` (recommandé) ou kubeconfig direct
-- CRDs installées : `make deploy-crd`
+Les tests **ne créent pas** de Namespaces, NamespaceRoles ou Secrets — ces ressources sont pré-créées une seule fois via `k8s/test-fixtures.yaml`. Les tests ne créent et suppriment que des objets `Instance`.
 
-**Avec `kubectl proxy` (défaut) :**
+| Namespace | Annotation | NamespaceRole | Secret IAM | Utilisé pour |
+| --- | --- | --- | --- | --- |
+| `scw-test-no-role` | UUID valide | aucune | — | NamespaceRole manquante |
+| `scw-test-no-annotation` | aucune | Editor | — | Annotation manquante |
+| `scw-test-invalid-uuid` | `"not-a-uuid"` | Editor | — | UUID invalide |
+| `scw-test-no-secret` | UUID valide | Editor | — | Secret IAM absent |
+| `scw-test-viewer` | UUID valide | Viewer | oui | Rôle lecture seule |
+| `scw-test-editor` | UUID valide | Editor | oui | Finalizer, suppression, création, sync |
+
+#### Setup (une seule fois)
 
 ```bash
-kubectl proxy &          # expose l'API sur http://localhost:8001
+# 1. Démarrer kubectl proxy (expose l'API sur http://localhost:8001)
+kubectl proxy &
+
+# 2. Installer les CRDs
 make deploy-crd
-make test-integration    # KUBE_API_URL=http://127.0.0.1:8001 par défaut
+
+# 3. Créer les ressources de test
+make deploy-test-fixtures
 ```
 
-**Avec un cluster direct (kubeconfig standard) :**
+#### Lancer les tests
 
 ```bash
-KUBE_API_URL="" make test-integration   # utilise Client::try_default() via kubeconfig
+make test-integration
 ```
 
-**Variables d'environnement :** aucune variable Scaleway n'est requise — l'API Scaleway est mockée.
+`KUBE_API_URL=http://127.0.0.1:8001` est passé automatiquement. Avec un cluster direct : `KUBE_API_URL="" make test-integration`.
 
-**Nettoyage manuel** (si un test a planté et laissé des ressources) :
+#### Nettoyage
+
+Instances laissées par un test qui a paniqué :
 
 ```bash
-kubectl delete ns -l app.kubernetes.io/managed-by=scaleway-operator-test
+kubectl delete instances -n scw-test-editor --all
+kubectl delete instances -n scw-test-viewer --all
+```
+
+Supprimer toutes les fixtures de test :
+
+```bash
+kubectl delete -f k8s/test-fixtures.yaml
 ```
 
 > `make coverage-json` et `make test` n'exécutent **pas** les tests d'intégration (ils sont marqués `#[ignore]`).

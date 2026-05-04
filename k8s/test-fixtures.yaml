@@ -1,0 +1,154 @@
+# Ressources de test pour make test-integration
+# Appliquer une seule fois : make deploy-test-fixtures
+# Supprimer : kubectl delete -f k8s/test-fixtures.yaml
+
+---
+# ── Namespace scaleway-system (peut déjà exister en prod) ────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scaleway-system
+
+---
+# ── scw-test-no-role : annotation UUID valide, PAS de NamespaceRole ──────────
+# Utilisé par : test_missing_namespace_role_returns_config_error
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-no-role
+  annotations:
+    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+# ── scw-test-no-annotation : PAS d'annotation, NamespaceRole Editor ──────────
+# Utilisé par : test_missing_project_id_annotation_returns_config_error
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-no-annotation
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: scw-test-no-annotation
+spec:
+  namespace: scw-test-no-annotation
+  scaleway_role: Editor
+  description: "Test fixture — namespace sans annotation project-id"
+
+---
+# ── scw-test-invalid-uuid : annotation non-UUID, NamespaceRole Editor ────────
+# Utilisé par : test_invalid_uuid_annotation_returns_config_error
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-invalid-uuid
+  annotations:
+    scaleway.io/project-id: "not-a-uuid"
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: scw-test-invalid-uuid
+spec:
+  namespace: scw-test-invalid-uuid
+  scaleway_role: Editor
+  description: "Test fixture — annotation UUID invalide"
+
+---
+# ── scw-test-no-secret : Editor + annotation valide, PAS de Secret IAM ───────
+# Utilisé par : test_missing_iam_secret_returns_config_error
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-no-secret
+  annotations:
+    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: scw-test-no-secret
+spec:
+  namespace: scw-test-no-secret
+  scaleway_role: Editor
+  description: "Test fixture — pas de Secret IAM"
+
+---
+# ── scw-test-viewer : rôle Viewer + Secret IAM ───────────────────────────────
+# Utilisé par : test_viewer_role_cannot_create_instance
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-viewer
+  annotations:
+    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: scw-test-viewer
+spec:
+  namespace: scw-test-viewer
+  scaleway_role: Viewer
+  description: "Test fixture — rôle Viewer (lecture seule)"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scaleway-ns-creds-scw-test-viewer
+  namespace: scaleway-system
+stringData:
+  secret_key: "mock-secret-key"
+
+---
+# ── scw-test-editor : rôle Editor + Secret IAM ───────────────────────────────
+# Utilisé par : test_finalizer_added_on_first_reconcile,
+#               test_deletion_with_scaleway_id_calls_delete_api,
+#               test_deletion_without_scaleway_id_removes_finalizer_only,
+#               test_create_instance_writes_scaleway_id_to_status,
+#               test_orphan_adoption_does_not_call_create,
+#               test_sync_updates_state_and_public_ip,
+#               test_scaleway_error_sets_sync_state_error
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scw-test-editor
+  annotations:
+    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+
+---
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: scw-test-editor
+spec:
+  namespace: scw-test-editor
+  scaleway_role: Editor
+  description: "Test fixture — rôle Editor principal"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scaleway-ns-creds-scw-test-editor
+  namespace: scaleway-system
+stringData:
+  secret_key: "mock-secret-key"

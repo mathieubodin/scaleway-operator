@@ -91,6 +91,9 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 	cargo run --example crd_gen
 	@echo "CRDs generated in k8s/"
 
+deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
+	kubectl apply -f k8s/test-fixtures.yaml
+
 deploy-crd: ## Deploie les CustomResourceDefinitions de l'operateur
 	@echo "Deploying CRDs..."
 	kubectl apply -f k8s/crd-instance.yaml
