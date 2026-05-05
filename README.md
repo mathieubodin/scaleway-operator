@@ -173,6 +173,144 @@ kubectl delete instance my-web-server
 
 L'opérateur supprimera automatiquement l'instance Scaleway correspondante.
 
+## 🎓 Tutoriel : déployer une instance de bout en bout
+
+Ce tutoriel illustre le cycle de vie complet d'une instance gérée par l'opérateur : setup du namespace, création, synchronisation d'état, et suppression propre.
+
+### 1. Préparer le namespace
+
+Chaque namespace hébergeant des `Instance` nécessite trois ressources. Créez un fichier `production-setup.yaml` :
+
+```yaml
+# 1/3 — Namespace avec l'ID du projet Scaleway cible
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  annotations:
+    scaleway.io/project-id: "<votre-project-id>"
+
+---
+# 2/3 — NamespaceRole : détermine le rôle IAM de l'opérateur pour ce namespace
+# Convention : le nom doit correspondre exactement au nom du namespace
+apiVersion: scaleway.io/v1
+kind: NamespaceRole
+metadata:
+  name: production
+spec:
+  namespace: production
+  scaleway_role: Editor   # Editor, Admin ou Viewer — voir section Rôles
+
+---
+# 3/3 — Secret IAM pré-provisionné par un admin (hors-bande)
+# Nom : scaleway-ns-creds-{nom-du-namespace}, dans le namespace scaleway-system
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scaleway-ns-creds-production
+  namespace: scaleway-system
+stringData:
+  secret_key: "<clé-secrète-IAM-Application-scopée-au-projet>"
+```
+
+```bash
+kubectl apply -f production-setup.yaml
+```
+
+> **Pourquoi un Secret séparé ?**
+> L'opérateur ne crée aucune ressource IAM côté Scaleway. Un admin provisionne une IAM Application avec `InstancesFullAccess` sur le projet cible, puis stocke sa clé dans ce Secret. L'opérateur est strictement lecteur sur ses prérequis.
+
+### 2. Créer l'instance
+
+Créez `web-server.yaml` :
+
+```yaml
+apiVersion: scaleway.io/v1
+kind: Instance
+metadata:
+  name: web-server
+  namespace: production
+spec:
+  name: web-server-prod   # nom visible dans la console Scaleway
+  zone: fr-par-1
+  image: ubuntu-jammy
+  instance_type: GP1-M
+  tags:
+    - prod
+    - web
+```
+
+```bash
+kubectl apply -f web-server.yaml
+```
+
+### 3. Suivre le cycle de vie
+
+L'opérateur fait progresser l'instance à travers plusieurs états :
+
+```mermaid
+stateDiagram-v2
+    [*] --> Syncing : Instance créée — finalizer ajouté, requeue
+    Syncing --> Syncing : instance en cours de création côté Scaleway
+    Syncing --> Synced : instance running — synchronisation toutes les 30s
+    Synced --> Syncing : resynchronisation périodique
+    Syncing --> Error : erreur Scaleway ou configuration manquante
+    Error --> Syncing : correction → requeue automatique
+    Synced --> [*] : kubectl delete → DELETE Scaleway + finalizer retiré
+```
+
+Observez l'évolution en temps réel :
+
+```bash
+kubectl get instances -n production -w
+```
+
+Sortie typique :
+
+```text
+NAME         SCALEWAY ID                            STATE      IP
+web-server                                          unknown              ← finalizer ajouté, requeue
+web-server   12345678-abcd-efgh-ijkl-123456789012   creating             ← instance créée côté Scaleway
+web-server   12345678-abcd-efgh-ijkl-123456789012   running    51.15.X.X ← synchronisée
+```
+
+### 4. Inspecter l'état
+
+```bash
+# Vue synthétique
+kubectl get instance web-server -n production
+
+# Détails complets avec events
+kubectl describe instance web-server -n production
+```
+
+La section `Status` affiche :
+
+```yaml
+Status:
+  Scaleway Id:  12345678-abcd-efgh-ijkl-123456789012
+  State:        running
+  Public Ip:    51.15.X.X
+  Sync State:   Synced
+```
+
+### 5. Supprimer l'instance
+
+```bash
+kubectl delete instance web-server -n production
+```
+
+L'opérateur :
+
+1. Détecte le `deletionTimestamp` positionné par Kubernetes
+2. Appelle `DELETE` sur l'API Scaleway — l'instance cloud est supprimée
+3. Retire le finalizer `scaleway.io/instance-finalizer`
+4. Kubernetes supprime l'objet `Instance`
+
+L'instance Scaleway est toujours supprimée **avant** que Kubernetes ne retire la ressource, garantissant l'absence de ressources orphelines.
+
+---
+
 ## 🔧 Configuration avancée
 
 ### Configuration réseau
