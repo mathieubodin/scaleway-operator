@@ -25,8 +25,12 @@ Thumbs.db
 .context/compound-engineering
 docs/ideation
 docs/plans
+docs/brainstorms
 NAMESPACE_PROJECTS.md
 NAMESPACE_ROLES.md
 QUICKSTART.md
 SETUP.md
 .compound-engineering/config.local*.yaml
+
+# Kubernetes
+.kube

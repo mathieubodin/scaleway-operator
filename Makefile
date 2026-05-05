@@ -92,30 +92,30 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 	@echo "CRDs generated in k8s/"
 
 deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
-	kubectl apply -f k8s/test-fixtures.yaml
+	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
 
 deploy-crd: ## Deploie les CustomResourceDefinitions de l'operateur
 	@echo "Deploying CRDs..."
-	kubectl apply -f k8s/crd-instance.yaml
-	kubectl apply -f k8s/crd-namespacerole.yaml
-	kubectl apply -f k8s/crd-project.yaml
+	kubectl --kubeconfig=.kube/config apply -f k8s/crd-instance.yaml
+	kubectl --kubeconfig=.kube/config apply -f k8s/crd-namespacerole.yaml
+	kubectl --kubeconfig=.kube/config apply -f k8s/crd-project.yaml
 	@echo "CRDs deployed successfully"
 
 deploy: deploy-crd ## Deploie l'operateur avec ses CustomResourceDefinitions
 	@echo "Deploying operator..."
-	kubectl apply -f k8s/deployment.yaml
+	kubectl --kubeconfig=.kube/config apply -f k8s/deployment.yaml
 	@echo "Operator deployed. Waiting for rollout..."
-	kubectl rollout status deployment/scaleway-operator -n scaleway-system
+	kubectl --kubeconfig=.kube/config rollout status deployment/scaleway-operator -n scaleway-system
 
 deploy-status: ## Affiche le status de l'operateur dans Kubernetes
 	@echo "=== Operator Deployment ==="
-	kubectl -n scaleway-system get deployment
+	kubectl --kubeconfig .kube/config -n scaleway-system get deployment
 	@echo ""
 	@echo "=== Operator Pods ==="
-	kubectl -n scaleway-system get pods
+	kubectl --kubeconfig .kube/config -n scaleway-system get pods
 	@echo ""
 	@echo "=== CRDs ==="
-	kubectl get crd | grep scaleway
+	kubectl --kubeconfig .kube/config get crds -l io.scaleway.k8s.crd.schema.version
 
 clean: ## Nettoyer les artefacts localement
 	cargo clean
