@@ -120,3 +120,30 @@ jobs:
           subject-name:   ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
+
+      # Publication des Helm charts en OCI sur GHCR
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR Helm registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io \
+              -u ${{ github.actor }} \
+              --password-stdin
+
+      - name: Package and push scaleway-operator-crds chart
+        run: |
+          helm package charts/scaleway-operator-crds \
+            --version ${{ needs.release-please.outputs.version }} \
+            --app-version ${{ needs.release-please.outputs.version }}
+          helm push scaleway-operator-crds-${{ needs.release-please.outputs.version }}.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/charts
+
+      - name: Package and push scaleway-operator chart
+        run: |
+          helm package charts/scaleway-operator \
+            --version ${{ needs.release-please.outputs.version }} \
+            --app-version ${{ needs.release-please.outputs.version }}
+          helm push scaleway-operator-${{ needs.release-please.outputs.version }}.tgz \
+            oci://ghcr.io/${{ github.repository_owner }}/charts
