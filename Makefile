@@ -2,7 +2,7 @@
 
 .PHONY: help build coverage-json check image-build image-push deploy deploy-crd deploy-status
 
-REGISTRY ?= docker.io
+REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
 IMAGE_TAG ?= latest
 FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)

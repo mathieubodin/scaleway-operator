@@ -114,7 +114,8 @@ spec:
         runAsUser: 65534
       containers:
       - name: operator
-        image: scaleway-operator:latest
+        # IMAGE_TAG est substitué via envsubst lors du déploiement (ex: IMAGE_TAG=v0.1.0 envsubst < deployment.yaml | kubectl apply -f -)
+        image: ghcr.io/mathieubodin/scaleway-operator:${IMAGE_TAG}
         imagePullPolicy: IfNotPresent
         env:
         - name: SCALEWAY_TOKEN
