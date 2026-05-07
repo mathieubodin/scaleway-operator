@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "scaleway": {
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "organizationId": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$"
+        },
+        "existingSecret": { "type": "string" },
+        "existingSecretTokenKey": { "type": "string" },
+        "existingSecretOrgIdKey": { "type": "string" }
+      }
+    },
+    "namespaceBootstrap": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "projectId"],
+            "properties": {
+              "name": { "type": "string" },
+              "projectId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

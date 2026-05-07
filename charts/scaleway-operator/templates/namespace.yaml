@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    app: scaleway-operator
+    {{- include "scaleway-operator.labels" . | nindent 4 }}

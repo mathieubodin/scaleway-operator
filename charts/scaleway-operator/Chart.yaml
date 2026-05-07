@@ -1,0 +1,69 @@
+apiVersion: v2
+name: scaleway-operator
+description: Kubernetes operator reconciling Scaleway cloud resources (instances, projects, load balancers)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - scaleway
+  - operator
+  - cloud
+  - instances
+  - kubernetes
+home: https://github.com/mathieubodin/scaleway-operator
+sources:
+  - https://github.com/mathieubodin/scaleway-operator
+maintainers:
+  - name: mathieubodin
+    url: https://github.com/mathieubodin
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: seamless upgrades
+  artifacthub.io/category: infrastructure
+  artifacthub.io/links: |
+    - name: source
+      url: https://github.com/mathieubodin/scaleway-operator
+    - name: support
+      url: https://github.com/mathieubodin/scaleway-operator/issues
+    - name: documentation
+      url: https://github.com/mathieubodin/scaleway-operator/tree/main/docs
+  artifacthub.io/crds: |
+    - kind: Instance
+      version: v1
+      name: instances.scaleway.io
+      displayName: Scaleway Instance
+      description: Manages the lifecycle of a Scaleway Compute Instance
+    - kind: NamespaceRole
+      version: v1
+      name: namespaceroles.scaleway.io
+      displayName: Namespace Role
+      description: Cluster-wide resource granting operator access to a namespace
+    - kind: Project
+      version: v1
+      name: projects.scaleway.io
+      displayName: Scaleway Project
+      description: Represents a Scaleway Project (defined, not yet reconciled in v0.1)
+    - kind: LoadBalancer
+      version: v1
+      name: loadbalancers.scaleway.io
+      displayName: Scaleway Load Balancer
+      description: Manages a Scaleway Load Balancer (defined, not yet reconciled in v0.1)
+  artifacthub.io/crdsExamples: |
+    - apiVersion: scaleway.io/v1
+      kind: Instance
+      metadata:
+        name: my-instance
+        namespace: production
+      spec:
+        name: my-instance
+        zone: fr-par-1
+        instance_type: DEV1-S
+        image: ubuntu-jammy
+    - apiVersion: scaleway.io/v1
+      kind: NamespaceRole
+      metadata:
+        name: production
+      spec:
+        namespace: production
+        scaleway_role: Editor

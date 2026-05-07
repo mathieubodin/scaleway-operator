@@ -1,0 +1,16 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "scaleway-operator.fullname" . }}
+  labels:
+    {{- include "scaleway-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "scaleway-operator.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "scaleway-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

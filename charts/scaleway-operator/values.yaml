@@ -1,0 +1,106 @@
+# Default values for scaleway-operator.
+
+# -- Number of operator replicas (1 is sufficient, no leader election needed at this scale)
+replicaCount: 1
+
+image:
+  # -- Image repository
+  repository: ghcr.io/mathieubodin/scaleway-operator
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag. Defaults to .Chart.AppVersion if empty
+  tag: ""
+
+# -- Image pull secrets
+imagePullSecrets: []
+
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full resource name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount for the operator
+  create: true
+  # -- Annotations to add to the ServiceAccount (e.g. for Workload Identity)
+  annotations: {}
+  # -- ServiceAccount name override (auto-generated from fullname if empty)
+  name: ""
+  # -- Automount API credentials
+  automountServiceAccountToken: true
+
+rbac:
+  # -- Create ClusterRole, ClusterRoleBinding, Role, and RoleBinding
+  create: true
+
+# -- Annotations to add to the operator Pod
+podAnnotations: {}
+# -- Labels to add to the operator Pod
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    memory: 512Mi
+    cpu: 500m
+  requests:
+    memory: 128Mi
+    cpu: 100m
+
+# Scaleway credentials configuration
+scaleway:
+  # -- Scaleway API token (requires InstancesFullAccess + ProjectReadOnly)
+  # Leave empty and set existingSecret if using an external secret manager
+  token: ""
+  # -- Scaleway organization ID (UUID format)
+  organizationId: ""
+  # -- Use an existing Secret instead of creating one from token/organizationId values
+  # The secret must exist in the same namespace as the operator
+  existingSecret: ""
+  # -- Key in existingSecret containing the API token
+  existingSecretTokenKey: "SCALEWAY_TOKEN"
+  # -- Key in existingSecret containing the organization ID
+  existingSecretOrgIdKey: "SCALEWAY_ORG_ID"
+
+# Namespace bootstrap: automatically create per-namespace prerequisites
+# (NamespaceRole + scaleway.io/project-id annotation)
+# The operator Secret (scaleway-ns-creds-<namespace>) must still be provisioned separately.
+namespaceBootstrap:
+  # -- Enable automatic namespace bootstrapping
+  enabled: false
+  # -- List of namespaces to bootstrap
+  # namespaces:
+  #   - name: production
+  #     projectId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  #   - name: staging
+  #     projectId: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+  namespaces: []
+
+# Metrics service configuration
+metrics:
+  # -- Expose the metrics/health port via a Service
+  enabled: true
+  # -- Service port
+  port: 8080
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Additional environment variables
+extraEnv: []
+# -- Additional volumes
+extraVolumes: []
+# -- Additional volume mounts
+extraVolumeMounts: []

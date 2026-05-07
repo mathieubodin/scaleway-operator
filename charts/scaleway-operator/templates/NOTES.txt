@@ -1,0 +1,50 @@
+Scaleway Operator {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+VERIFY OPERATOR STATUS
+======================
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "scaleway-operator.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "scaleway-operator.name" . }}
+
+PER-NAMESPACE PREREQUISITES
+============================
+Each namespace hosting Scaleway Instances requires three prerequisites.
+{{- if .Values.namespaceBootstrap.enabled }}
+
+Namespace bootstrap is ENABLED for:
+{{- range .Values.namespaceBootstrap.namespaces }}
+  - {{ .name }} (project: {{ .projectId }})
+{{- end }}
+Steps 1 and 2 have been created automatically. Step 3 remains manual.
+{{- else }}
+
+  1. Annotation scaleway.io/project-id on the namespace:
+
+       kubectl annotate namespace <my-namespace> \
+         scaleway.io/project-id=<your-project-uuid>
+
+  2. Cluster-wide NamespaceRole whose name matches the namespace:
+
+       kubectl apply -f - <<EOF
+       apiVersion: scaleway.io/v1
+       kind: NamespaceRole
+       metadata:
+         name: <my-namespace>
+       spec:
+         namespace: <my-namespace>
+         scaleway_role: Editor
+       EOF
+
+  To automate steps 1 and 2, enable bootstrap in your values:
+
+       namespaceBootstrap:
+         enabled: true
+         namespaces:
+           - name: production
+             projectId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+{{- end }}
+
+  3. Secret in scaleway-system (must be provisioned by admin — not created by this chart):
+
+       kubectl create secret generic scaleway-ns-creds-<my-namespace> \
+         -n {{ .Release.Namespace }} \
+         --from-literal=secret_key=<namespace-scoped-scaleway-token>
