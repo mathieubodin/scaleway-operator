@@ -80,6 +80,7 @@ check: check-cargo ## Lint et format
 	cargo clippy -- -D warnings
 	cargo check
 	markdownlint-cli2
+	$(MAKE) helm-lint
 
 image-build: ## Construit l'image
 	docker build -t $(FULL_IMAGE) .
