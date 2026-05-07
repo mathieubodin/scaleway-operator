@@ -1,6 +1,6 @@
 -include .env .env.local
 
-.PHONY: help build coverage-json check image-build image-push deploy deploy-crd deploy-status
+.PHONY: help build coverage-json check image-build image-push deploy deploy-crd deploy-status helm-lint helm-template helm-crds-template
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -120,3 +120,18 @@ deploy-status: ## Affiche le status de l'operateur dans Kubernetes
 clean: ## Nettoyer les artefacts localement
 	cargo clean
 	rm -rf target/
+
+helm-lint: ## Linter les deux Helm charts
+	helm lint charts/scaleway-operator-crds/
+	helm lint charts/scaleway-operator/ \
+		--set scaleway.token=placeholder \
+		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
+
+helm-crds-template: ## Afficher les manifests générés par le chart CRDs
+	helm template scaleway-operator-crds charts/scaleway-operator-crds/
+
+helm-template: ## Afficher les manifests générés par le chart opérateur
+	helm template scaleway-operator charts/scaleway-operator/ \
+		--set scaleway.token=placeholder \
+		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000 \
+		--namespace scaleway-system
