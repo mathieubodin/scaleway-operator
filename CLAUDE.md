@@ -17,6 +17,15 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 - Deployer la stack operateur             : `make deploy`
 - Verifier l'etat du deploiement          : `make deploy-status`
 
+**Prérequis pour les targets deploy :**
+- Kubeconfig : préférer `KUBECONFIG=~/.kube/config make deploy-crds` (standard).
+  `.kube/config` à la racine du repo fonctionne aussi mais ne doit jamais être commité
+  (credentials cluster — déjà dans `.gitignore`).
+- Credentials Scaleway pour `make deploy` : passer via `--values` ou
+  `HELM_EXTRA_FLAGS="--set scaleway.token=<token> --set scaleway.organizationId=<uuid>"`.
+- Pour forcer une mise à jour helm (cas de récupération) :
+  `HELM_EXTRA_FLAGS=--force make deploy-crds`
+
 ## Architecture
 
 Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il réconcilie des Custom Resources Scaleway avec l'API Scaleway.

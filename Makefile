@@ -9,6 +9,14 @@ FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 COVERAGE_DIR = target/llvm-cov
 
+KUBECONFIG ?= .kube/config
+HELM_EXTRA_FLAGS ?=
+
+CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $$2}')
+CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $$2}')
+$(if $(CHART_CRDS_VERSION),,$(error Cannot determine CHART_CRDS_VERSION from charts/scaleway-operator-crds/Chart.yaml))
+$(if $(CHART_OP_VERSION),,$(error Cannot determine CHART_OP_VERSION from charts/scaleway-operator/Chart.yaml))
+
 help: ## Affiche cette aide
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} \
 	     /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 }' \
@@ -108,32 +116,36 @@ deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (
 	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
 
 deploy-crds: helm-crds-package ## Deploie les CRDs via le chart Helm packagé localement
+	@test -f target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz || \
+		(echo "Run make helm-crds-package first" && exit 1)
 	helm upgrade --install scaleway-operator-crds \
-		$$(ls -t target/charts/scaleway-operator-crds-*.tgz | head -1) \
-		--kubeconfig .kube/config \
-		--force
+		target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz \
+		--kubeconfig $(KUBECONFIG) \
+		$(HELM_EXTRA_FLAGS)
 
 deploy: helm-package ## Deploie l'operateur via le chart Helm packagé localement
+	@test -f target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz || \
+		(echo "Run make helm-package first" && exit 1)
 	helm upgrade --install scaleway-operator \
-		$$(ls -t target/charts/scaleway-operator-*.tgz | grep -v crds | head -1) \
-		--kubeconfig .kube/config \
+		target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz \
+		--kubeconfig $(KUBECONFIG) \
 		--namespace scaleway-system \
 		--create-namespace \
-		--force
+		$(HELM_EXTRA_FLAGS)
 
 deploy-status: ## Affiche le status de l'operateur dans Kubernetes
 	@echo "=== Helm Releases ==="
-	helm list --all-namespaces --kubeconfig .kube/config
+	helm list --all-namespaces --kubeconfig $(KUBECONFIG)
 	@echo ""
 	@echo "=== Operator Release ==="
-	helm status scaleway-operator --namespace scaleway-system --kubeconfig .kube/config 2>/dev/null || \
+	helm status scaleway-operator --namespace scaleway-system --kubeconfig $(KUBECONFIG) 2>/dev/null || \
 		echo "(release scaleway-operator not found)"
 	@echo ""
 	@echo "=== Operator Pods ==="
-	kubectl --kubeconfig .kube/config -n scaleway-system get pods
+	kubectl --kubeconfig $(KUBECONFIG) -n scaleway-system get pods
 	@echo ""
 	@echo "=== CRDs ==="
-	kubectl --kubeconfig .kube/config get crds -l io.mathieubodin.scaleway.k8s.crd.schema.version
+	kubectl --kubeconfig $(KUBECONFIG) get crds -l io.mathieubodin.scaleway.k8s.crd.schema.version
 
 clean: ## Nettoyer les artefacts localement
 	cargo clean
