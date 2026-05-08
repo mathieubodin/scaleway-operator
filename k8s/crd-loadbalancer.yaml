@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   name: loadbalancers.scaleway.mathieubodin.io
   labels:
-    io.scaleway.k8s.crd.schema.version: 0.1.0
+    io.mathieubodin.scaleway.k8s.crd.schema.version: 0.1.0
 spec:
   group: scaleway.mathieubodin.io
   names:

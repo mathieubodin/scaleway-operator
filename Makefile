@@ -75,12 +75,15 @@ coverage: check-llvm-cov ## Teste l'application et produit un rapport JSON
 coverage-json: check-llvm-cov ## Teste l'application et produit un rapport JSON
 	cargo llvm-cov --json 2>/dev/null | jq "." > $(COVERAGE_DIR)/cov.json
 
-check: check-cargo ## Lint et format
+check: check-cargo check-helm ## Lint et format
 	cargo fmt
 	cargo clippy -- -D warnings
 	cargo check
 	markdownlint-cli2
-	$(MAKE) check-helm
+	helm lint charts/scaleway-operator-crds/
+	helm lint charts/scaleway-operator/ \
+		--set scaleway.token=placeholder \
+		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
 
 image-build: ## Construit l'image
 	docker build -t $(FULL_IMAGE) .
@@ -121,13 +124,13 @@ deploy-status: ## Affiche le status de l'operateur dans Kubernetes
 	kubectl --kubeconfig .kube/config -n scaleway-system get pods
 	@echo ""
 	@echo "=== CRDs ==="
-	kubectl --kubeconfig .kube/config get crds -l io.scaleway.k8s.crd.schema.version
+	kubectl --kubeconfig .kube/config get crds -l io.mathieubodin.scaleway.k8s.crd.schema.version
 
 clean: ## Nettoyer les artefacts localement
 	cargo clean
 	rm -rf target/
 
-check-helm: ## Linter les deux Helm charts (nécessite helm)
+check-helm: ## Vérifie que helm est installé
 	@command -v helm >/dev/null 2>&1 || { \
 		echo ""; \
 		echo "Error: helm not found. Install with:"; \
@@ -135,10 +138,6 @@ check-helm: ## Linter les deux Helm charts (nécessite helm)
 		echo ""; \
 		exit 1; \
 	}
-	helm lint charts/scaleway-operator-crds/
-	helm lint charts/scaleway-operator/ \
-		--set scaleway.token=placeholder \
-		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
 
 helm-crds-package: ## Package le chart CRDs dans target/charts/
 	@mkdir -p target/charts
