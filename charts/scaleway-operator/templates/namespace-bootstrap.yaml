@@ -3,7 +3,7 @@
 ---
 # NamespaceRole cluster-wide pour le namespace {{ .name }}
 # helm.sh/resource-policy: keep protège cette ressource lors d'un helm uninstall
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: {{ .name }}
@@ -16,12 +16,12 @@ spec:
   namespace: {{ .name }}
   scaleway_role: Editor
 ---
-# Annotation scaleway.io/project-id sur le namespace {{ .name }}
+# Annotation scaleway.mathieubodin.io/project-id sur le namespace {{ .name }}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .name }}
   annotations:
-    scaleway.io/project-id: {{ required (printf "namespaceBootstrap.namespaces[].projectId is required for namespace '%s'" .name) .projectId | quote }}
+    scaleway.mathieubodin.io/project-id: {{ required (printf "namespaceBootstrap.namespaces[].projectId is required for namespace '%s'" .name) .projectId | quote }}
 {{- end }}
 {{- end }}

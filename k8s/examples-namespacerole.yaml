@@ -1,7 +1,7 @@
 ---
 # Exemple 1: Assigner le rôle Editor au namespace production
 # Convention: le nom du NamespaceRole doit être le même que le namespace
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: production  # Doit correspondre au namespace "production"
@@ -12,7 +12,7 @@ spec:
 
 ---
 # Exemple 2: Assigner le rôle Viewer au namespace development (lecture seule)
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: development
@@ -23,7 +23,7 @@ spec:
 
 ---
 # Exemple 3: Assigner le rôle Admin au namespace admin
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: admin
@@ -34,7 +34,7 @@ spec:
 
 ---
 # Exemple 4: Assigner le rôle SecurityResponsible au namespace security
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: security

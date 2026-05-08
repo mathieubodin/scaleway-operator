@@ -6,13 +6,13 @@ metadata:
   labels:
     {{- include "scaleway-operator.labels" . | nindent 4 }}
 rules:
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
   verbs: ["update"]
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["namespaceroles"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]

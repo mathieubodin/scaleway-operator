@@ -43,7 +43,7 @@ helm install scaleway-operator \
 
 Each namespace hosting `Instance` resources requires:
 
-1. The annotation `scaleway.io/project-id` on the namespace
+1. The annotation `scaleway.mathieubodin.io/project-id` on the namespace
 2. A cluster-wide `NamespaceRole` resource whose name matches the namespace
 3. A Secret `scaleway-ns-creds-<namespace>` in `scaleway-system` (provisioned by admin)
 

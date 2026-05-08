@@ -67,13 +67,13 @@ Chaque namespace hébergeant des `Instance` doit avoir **deux prérequis** :
 
 ```bash
 kubectl annotate namespace production \
-  scaleway.io/project-id="12345678-1234-1234-1234-123456789012"
+  scaleway.mathieubodin.io/project-id="12345678-1234-1234-1234-123456789012"
 ```
 
 **b) Créer la ressource `NamespaceRole` (nom = nom du namespace) :**
 
 ```yaml
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: production          # Doit correspondre exactement au nom du namespace
@@ -130,10 +130,10 @@ kubectl -n scaleway-system logs -f deployment/scaleway-operator
 
 ### Créer une instance
 
-Le `project_id` et les credentials sont lus automatiquement depuis le namespace (annotation `scaleway.io/project-id` et Secret `scaleway-ns-creds-{namespace}`). Ne les mettez pas dans le spec de l'Instance.
+Le `project_id` et les credentials sont lus automatiquement depuis le namespace (annotation `scaleway.mathieubodin.io/project-id` et Secret `scaleway-ns-creds-{namespace}`). Ne les mettez pas dans le spec de l'Instance.
 
 ```yaml
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: my-web-server
@@ -188,12 +188,12 @@ kind: Namespace
 metadata:
   name: production
   annotations:
-    scaleway.io/project-id: "<votre-project-id>"
+    scaleway.mathieubodin.io/project-id: "<votre-project-id>"
 
 ---
 # 2/3 — NamespaceRole : détermine le rôle IAM de l'opérateur pour ce namespace
 # Convention : le nom doit correspondre exactement au nom du namespace
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: production
@@ -225,7 +225,7 @@ kubectl apply -f production-setup.yaml
 Créez `web-server.yaml` :
 
 ```yaml
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: web-server
@@ -304,7 +304,7 @@ L'opérateur :
 
 1. Détecte le `deletionTimestamp` positionné par Kubernetes
 2. Appelle `DELETE` sur l'API Scaleway — l'instance cloud est supprimée
-3. Retire le finalizer `scaleway.io/instance-finalizer`
+3. Retire le finalizer `scaleway.mathieubodin.io/instance-finalizer`
 4. Kubernetes supprime l'objet `Instance`
 
 L'instance Scaleway est toujours supprimée **avant** que Kubernetes ne retire la ressource, garantissant l'absence de ressources orphelines.
@@ -378,13 +378,13 @@ kubectl describe instance my-instance
 
 Le namespace n'a pas de ressource `NamespaceRole` associée. Créez-en une dont le `metadata.name` correspond exactement au nom du namespace (voir étape 3b de l'installation).
 
-### Erreur: "Namespace must have annotation scaleway.io/project-id"
+### Erreur: "Namespace must have annotation scaleway.mathieubodin.io/project-id"
 
 Annotez le namespace avec le projet Scaleway cible :
 
 ```bash
 kubectl annotate namespace <votre-namespace> \
-  scaleway.io/project-id="<uuid-du-projet>"
+  scaleway.mathieubodin.io/project-id="<uuid-du-projet>"
 ```
 
 ### Erreur: "Secret scaleway-ns-creds-X not found"
@@ -393,7 +393,7 @@ Créez le Secret IAM pré-provisionné pour ce namespace (voir étape 3c de l'in
 
 ### Erreur: "Project access denied"
 
-- Vérifier que l'annotation `scaleway.io/project-id` du namespace contient le bon UUID
+- Vérifier que l'annotation `scaleway.mathieubodin.io/project-id` du namespace contient le bon UUID
 - Vérifier que le token API de l'opérateur a la permission `ProjectReadOnly`
 - Vérifier que le projet existe dans Scaleway
 

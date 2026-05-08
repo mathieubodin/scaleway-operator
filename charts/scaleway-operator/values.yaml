@@ -74,7 +74,7 @@ scaleway:
   existingSecretOrgIdKey: "SCALEWAY_ORG_ID"
 
 # Namespace bootstrap: automatically create per-namespace prerequisites
-# (NamespaceRole + scaleway.io/project-id annotation)
+# (NamespaceRole + scaleway.mathieubodin.io/project-id annotation)
 # The operator Secret (scaleway-ns-creds-<namespace>) must still be provisioned separately.
 namespaceBootstrap:
   # -- Enable automatic namespace bootstrapping

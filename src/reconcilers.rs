@@ -11,7 +11,7 @@ use kube::{api::PatchParams, Api, ResourceExt};
 use std::sync::Arc;
 use std::time::Duration;
 
-const INSTANCE_FINALIZER: &str = "scaleway.io/instance-finalizer";
+const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 /// Retourne true si le rôle autorise les opérations d'écriture sur les instances.
@@ -73,10 +73,10 @@ async fn get_project_id_from_namespace(instance: &Instance, ctx: &Arc<Context>) 
     extract_project_id_from_namespace(annotations).ok_or_else(|| {
         tracing::error!(
             namespace = %namespace,
-            "Namespace missing required annotation: scaleway.io/project-id"
+            "Namespace missing required annotation: scaleway.mathieubodin.io/project-id"
         );
         OperatorError::ConfigError(format!(
-            "Namespace '{}' must have annotation 'scaleway.io/project-id'",
+            "Namespace '{}' must have annotation 'scaleway.mathieubodin.io/project-id'",
             namespace
         ))
     })
@@ -124,7 +124,7 @@ pub async fn reconcile_instance(
             // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
             if uuid::Uuid::parse_str(&pid).is_err() {
                 let e = OperatorError::ConfigError(format!(
-                    "Annotation 'scaleway.io/project-id' must be a valid UUID, got: '{}'",
+                    "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
                     pid
                 ));
                 let mut status = instance.status.clone().unwrap_or_default();

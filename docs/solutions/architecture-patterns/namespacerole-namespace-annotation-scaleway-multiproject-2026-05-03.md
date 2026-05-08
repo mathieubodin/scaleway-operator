@@ -38,7 +38,7 @@ Ces deux problèmes sont résolus par des conventions portées par des primitive
 
 ## Guidance
 
-### Pattern 1 : Annotation `scaleway.io/project-id` sur le namespace
+### Pattern 1 : Annotation `scaleway.mathieubodin.io/project-id` sur le namespace
 
 Le projet Scaleway cible est déclaré une seule fois, sur le namespace, via une annotation. Toutes les ressources `Instance` du namespace héritent implicitement de ce contexte de projet.
 
@@ -50,13 +50,13 @@ kind: Namespace
 metadata:
   name: production
   annotations:
-    scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
+    scaleway.mathieubodin.io/project-id: "12345678-1234-1234-1234-123456789012"
 ```
 
 **Extraction dans `context.rs` :**
 
 ```rust
-const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.io/project-id";
+const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.mathieubodin.io/project-id";
 
 pub fn extract_project_id_from_namespace(
     namespace_annotations: &std::collections::BTreeMap<String, String>,
@@ -72,7 +72,7 @@ L'annotation est validée en tant qu'UUID avant tout appel API, pour prévenir l
 ```rust
 if uuid::Uuid::parse_str(&pid).is_err() {
     return Err(OperatorError::ConfigError(format!(
-        "Annotation 'scaleway.io/project-id' must be a valid UUID, got: '{}'",
+        "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
         pid
     )));
 }
@@ -87,7 +87,7 @@ Cette convention élimine tout champ de sélecteur : le lookup se fait directeme
 
 ```rust
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.io", version = "v1", kind = "NamespaceRole")]
+#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "NamespaceRole")]
 #[kube(status = "NamespaceRoleStatus")]
 // Absence de #[kube(namespaced)] → cluster-wide
 pub struct NamespaceRoleSpec {
@@ -191,10 +191,10 @@ kind: Namespace
 metadata:
   name: production
   annotations:
-    scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
+    scaleway.mathieubodin.io/project-id: "12345678-1234-1234-1234-123456789012"
 ---
 # 2. Créer le NamespaceRole (nom = namespace — convention stricte)
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: production
@@ -204,7 +204,7 @@ spec:
   description: "Production — Editor, création d'instances autorisée"
 ---
 # 3. Instance sans project_id (hérité du namespace)
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: web-server
@@ -219,7 +219,7 @@ spec:
 À la réconciliation, l'opérateur :
 
 1. Résout `NamespaceRole/production` → rôle `Editor`
-2. Résout l'annotation `scaleway.io/project-id` → `12345678-...`
+2. Résout l'annotation `scaleway.mathieubodin.io/project-id` → `12345678-...`
 3. Vérifie `role_allows_write("Editor")` → `true`
 4. Provisionne IAM Application + Policy `InstancesFullAccess` + API Key
 5. Crée l'instance avec les credentials scopés
@@ -232,9 +232,9 @@ kind: Namespace
 metadata:
   name: staging
   annotations:
-    scaleway.io/project-id: "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
+    scaleway.mathieubodin.io/project-id: "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: staging
@@ -261,4 +261,4 @@ Toute `Instance` dans ce namespace sera bloquée à la création avec :
 - `src/reconcilers.rs` — `reconcile_instance()`, `role_to_permission_sets()`, `role_allows_write()`
 - `k8s/crd-namespacerole.yaml` — manifeste CRD Kubernetes
 - `NAMESPACE_ROLES.md` — guide opérationnel complet (cas d'usage, troubleshooting, FAQ)
-- `NAMESPACE_PROJECTS.md` — guide opérationnel annotation `scaleway.io/project-id`
+- `NAMESPACE_PROJECTS.md` — guide opérationnel annotation `scaleway.mathieubodin.io/project-id`

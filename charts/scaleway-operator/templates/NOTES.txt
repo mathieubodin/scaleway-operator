@@ -17,15 +17,15 @@ Namespace bootstrap is ENABLED for:
 Steps 1 and 2 have been created automatically. Step 3 remains manual.
 {{- else }}
 
-  1. Annotation scaleway.io/project-id on the namespace:
+  1. Annotation scaleway.mathieubodin.io/project-id on the namespace:
 
        kubectl annotate namespace <my-namespace> \
-         scaleway.io/project-id=<your-project-uuid>
+         scaleway.mathieubodin.io/project-id=<your-project-uuid>
 
   2. Cluster-wide NamespaceRole whose name matches the namespace:
 
        kubectl apply -f - <<EOF
-       apiVersion: scaleway.io/v1
+       apiVersion: scaleway.mathieubodin.io/v1
        kind: NamespaceRole
        metadata:
          name: <my-namespace>

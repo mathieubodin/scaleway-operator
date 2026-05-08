@@ -1,7 +1,7 @@
 use crate::scaleway::ScalewayClient;
 use kube::Client;
 
-const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.io/project-id";
+const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.mathieubodin.io/project-id";
 
 pub struct Context {
     pub client: Client,

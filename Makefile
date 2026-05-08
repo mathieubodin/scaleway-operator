@@ -1,6 +1,6 @@
 -include .env .env.local
 
-.PHONY: help build coverage-json check image-build image-push deploy deploy-crd deploy-status helm-lint helm-template helm-crds-template
+.PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status check-helm helm-template helm-crds-template helm-crds-package helm-package
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -52,7 +52,7 @@ check-docker:
 		exit 1; \
 	}
 
-env-check: check-cargo check-llvm-cov check-kubectl check-docker ## Teste la conformite de l'environnement
+env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""
@@ -65,7 +65,7 @@ test: check-cargo
 
 KUBE_API_URL ?= http://127.0.0.1:8001
 
-test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crd + kubectl proxy sur :8001)
+test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crds + kubectl proxy sur :8001)
 	KUBE_API_URL=$(KUBE_API_URL) cargo test --test integration -- --ignored
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport JSON
@@ -80,7 +80,7 @@ check: check-cargo ## Lint et format
 	cargo clippy -- -D warnings
 	cargo check
 	markdownlint-cli2
-	$(MAKE) helm-lint
+	$(MAKE) check-helm
 
 image-build: ## Construit l'image
 	docker build -t $(FULL_IMAGE) .
@@ -95,22 +95,27 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
 	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
 
-deploy-crd: ## Deploie les CustomResourceDefinitions de l'operateur
-	@echo "Deploying CRDs..."
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-instance.yaml
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-namespacerole.yaml
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-project.yaml
-	@echo "CRDs deployed successfully"
+deploy-crds: helm-crds-package ## Deploie les CRDs via le chart Helm packagé localement
+	helm upgrade --install scaleway-operator-crds \
+		$$(ls -t target/charts/scaleway-operator-crds-*.tgz | head -1) \
+		--kubeconfig .kube/config \
+		--force
 
-deploy: deploy-crd ## Deploie l'operateur avec ses CustomResourceDefinitions
-	@echo "Deploying operator..."
-	kubectl --kubeconfig=.kube/config apply -f k8s/deployment.yaml
-	@echo "Operator deployed. Waiting for rollout..."
-	kubectl --kubeconfig=.kube/config rollout status deployment/scaleway-operator -n scaleway-system
+deploy: helm-package ## Deploie l'operateur via le chart Helm packagé localement
+	helm upgrade --install scaleway-operator \
+		$$(ls -t target/charts/scaleway-operator-*.tgz | grep -v crds | head -1) \
+		--kubeconfig .kube/config \
+		--namespace scaleway-system \
+		--create-namespace \
+		--force
 
 deploy-status: ## Affiche le status de l'operateur dans Kubernetes
-	@echo "=== Operator Deployment ==="
-	kubectl --kubeconfig .kube/config -n scaleway-system get deployment
+	@echo "=== Helm Releases ==="
+	helm list --all-namespaces --kubeconfig .kube/config
+	@echo ""
+	@echo "=== Operator Release ==="
+	helm status scaleway-operator --namespace scaleway-system --kubeconfig .kube/config 2>/dev/null || \
+		echo "(release scaleway-operator not found)"
 	@echo ""
 	@echo "=== Operator Pods ==="
 	kubectl --kubeconfig .kube/config -n scaleway-system get pods
@@ -122,11 +127,26 @@ clean: ## Nettoyer les artefacts localement
 	cargo clean
 	rm -rf target/
 
-helm-lint: ## Linter les deux Helm charts
+check-helm: ## Linter les deux Helm charts (nécessite helm)
+	@command -v helm >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: helm not found. Install with:"; \
+		echo "  brew install helm"; \
+		echo ""; \
+		exit 1; \
+	}
 	helm lint charts/scaleway-operator-crds/
 	helm lint charts/scaleway-operator/ \
 		--set scaleway.token=placeholder \
 		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
+
+helm-crds-package: ## Package le chart CRDs dans target/charts/
+	@mkdir -p target/charts
+	helm package charts/scaleway-operator-crds/ --destination target/charts/
+
+helm-package: ## Package le chart opérateur dans target/charts/
+	@mkdir -p target/charts
+	helm package charts/scaleway-operator/ --destination target/charts/
 
 helm-crds-template: ## Afficher les manifests générés par le chart CRDs
 	helm template scaleway-operator-crds charts/scaleway-operator-crds/
