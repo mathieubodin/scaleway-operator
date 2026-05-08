@@ -1,6 +1,7 @@
 ---
 title: "Kubernetes CRD API group must use a domain you own — not the upstream vendor's"
 date: 2026-05-08
+last_updated: 2026-05-08
 category: docs/solutions/conventions/
 module: resources
 problem_type: convention
@@ -11,6 +12,7 @@ applies_when:
   - Forking or adapting an existing operator from another author
   - Writing annotation key constants or finalizer strings in a Kubernetes operator
   - Wrapping a named cloud provider (Scaleway, AWS, GCP, Hetzner, etc.)
+  - Setting metadata labels on CRD objects (label key prefix must also be your domain)
 tags:
   - kubernetes
   - crd
@@ -19,6 +21,7 @@ tags:
   - naming
   - operator
   - convention
+  - labels
 ---
 
 # Kubernetes CRD API group must use a domain you own — not the upstream vendor's
@@ -79,6 +82,7 @@ grep -rn "scaleway\.io" \
 | Rust constants | `src/context.rs`, `src/reconcilers.rs` — annotation key, finalizer string, error messages |
 | Helm charts | CRD templates (`group:`, `name:`), `clusterrole.yaml`, `namespace-bootstrap.yaml`, `NOTES.txt`, `Chart.yaml` (artifacthub annotations) |
 | k8s/ manifests | CRD files, `deployment.yaml` (RBAC), examples, test fixtures |
+| CRD metadata labels | Label keys on CRD objects — e.g., `io.scaleway.k8s.crd.schema.version` → `io.mathieubodin.scaleway.k8s.crd.schema.version` |
 | Tests | `tests/integration.rs` — assertion strings like `.contains("scaleway.io/project-id")` |
 | Docs | `README.md`, `CLAUDE.md`, `docs/solutions/` |
 
