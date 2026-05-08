@@ -129,16 +129,27 @@ jobs:
             --username ${{ github.actor }} \
             --password ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Create chart output directory
+        run: mkdir -p target/charts
+
       - name: Package and push scaleway-operator-crds chart
         run: |
-          mkdir -p target/charts
+          CHART_VERSION=$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}')
+          if [ -z "$CHART_VERSION" ]; then
+            echo "ERROR: Could not determine chart version from charts/scaleway-operator-crds/Chart.yaml" >&2
+            exit 1
+          fi
           helm package charts/scaleway-operator-crds --destination target/charts/
-          helm push target/charts/scaleway-operator-crds-$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}').tgz \
+          helm push "target/charts/scaleway-operator-crds-${CHART_VERSION}.tgz" \
             oci://ghcr.io/${{ github.repository_owner }}/charts
 
       - name: Package and push scaleway-operator chart
         run: |
-          mkdir -p target/charts
+          CHART_VERSION=$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}')
+          if [ -z "$CHART_VERSION" ]; then
+            echo "ERROR: Could not determine chart version from charts/scaleway-operator/Chart.yaml" >&2
+            exit 1
+          fi
           helm package charts/scaleway-operator --destination target/charts/
-          helm push target/charts/scaleway-operator-$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}').tgz \
+          helm push "target/charts/scaleway-operator-${CHART_VERSION}.tgz" \
             oci://ghcr.io/${{ github.repository_owner }}/charts

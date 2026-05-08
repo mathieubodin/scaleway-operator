@@ -12,10 +12,8 @@ COVERAGE_DIR = target/llvm-cov
 KUBECONFIG ?= .kube/config
 HELM_EXTRA_FLAGS ?=
 
-CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $$2}')
-CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $$2}')
-$(if $(CHART_CRDS_VERSION),,$(error Cannot determine CHART_CRDS_VERSION from charts/scaleway-operator-crds/Chart.yaml))
-$(if $(CHART_OP_VERSION),,$(error Cannot determine CHART_OP_VERSION from charts/scaleway-operator/Chart.yaml))
+CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml 2>/dev/null | awk '{print $$2}')
+CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml 2>/dev/null | awk '{print $$2}')
 
 help: ## Affiche cette aide
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} \
@@ -115,7 +113,12 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
 	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
 
-deploy-crds: helm-crds-package ## Deploie les CRDs via le chart Helm packagé localement
+.PHONY: .check-chart-versions
+.check-chart-versions:
+	$(if $(CHART_CRDS_VERSION),,$(error Cannot determine CHART_CRDS_VERSION from charts/scaleway-operator-crds/Chart.yaml))
+	$(if $(CHART_OP_VERSION),,$(error Cannot determine CHART_OP_VERSION from charts/scaleway-operator/Chart.yaml))
+
+deploy-crds: helm-crds-package .check-chart-versions ## Deploie les CRDs via le chart Helm packagé localement
 	@test -f target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz || \
 		(echo "Run make helm-crds-package first" && exit 1)
 	helm upgrade --install scaleway-operator-crds \
@@ -123,7 +126,7 @@ deploy-crds: helm-crds-package ## Deploie les CRDs via le chart Helm packagé lo
 		--kubeconfig $(KUBECONFIG) \
 		$(HELM_EXTRA_FLAGS)
 
-deploy: helm-package ## Deploie l'operateur via le chart Helm packagé localement
+deploy: helm-package .check-chart-versions ## Deploie l'operateur via le chart Helm packagé localement
 	@test -f target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz || \
 		(echo "Run make helm-package first" && exit 1)
 	helm upgrade --install scaleway-operator \
@@ -160,11 +163,11 @@ check-helm: ## Vérifie que helm est installé
 		exit 1; \
 	}
 
-helm-crds-package: ## Package le chart CRDs dans target/charts/
+helm-crds-package: .check-chart-versions ## Package le chart CRDs dans target/charts/
 	@mkdir -p target/charts
 	helm package charts/scaleway-operator-crds/ --destination target/charts/
 
-helm-package: ## Package le chart opérateur dans target/charts/
+helm-package: .check-chart-versions ## Package le chart opérateur dans target/charts/
 	@mkdir -p target/charts
 	helm package charts/scaleway-operator/ --destination target/charts/
 

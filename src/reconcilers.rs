@@ -202,10 +202,13 @@ pub async fn reconcile_instance(
             return Err(e);
         }
 
-        // Vérifier l'accès projet uniquement à la création (pas à chaque sync de 30s)
-        ctx.scaleway_client
-            .verify_project_access(&project_id)
-            .await?;
+        // Vérifier l'accès projet uniquement à la première création (status.project_id absent).
+        // Sauter lors d'une re-création après InstanceNotFound : le projet était déjà validé.
+        if status.project_id.is_none() {
+            ctx.scaleway_client
+                .verify_project_access(&project_id)
+                .await?;
+        }
 
         // Cherche d'abord une instance existante par nom : récupère une instance
         // orpheline si le status n'a pas pu être écrit lors d'une réconciliation précédente.
@@ -266,9 +269,13 @@ pub async fn reconcile_instance(
                 status.scaleway_id = None;
                 status.state = "unknown".to_string();
                 status.public_ip = None;
+                status.project_id = None;
+                status.created_at = None;
                 status.error_message = None;
                 status.sync_state = "Syncing".to_string();
-                update_status(&instance, &api, status).await?;
+                if let Err(patch_err) = update_status(&instance, &api, status).await {
+                    tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after NotFound — will retry");
+                }
                 return Ok(Action::requeue(Duration::from_secs(5)));
             }
             Err(e) => {
@@ -297,25 +304,40 @@ async fn handle_deletion(
     if let Some(status) = &instance.status {
         if let Some(instance_id) = &status.scaleway_id {
             let namespace = instance.namespace().unwrap_or_default();
-            let ns_client = get_namespace_client(ctx, &namespace).await?;
-            match ns_client
-                .delete_instance(&instance.spec.zone, instance_id)
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        name = %instance.name_any(),
-                        instance_id = %instance_id,
-                        "Successfully deleted Scaleway instance"
-                    );
+            match get_namespace_client(ctx, &namespace).await {
+                Ok(ns_client) => {
+                    match ns_client
+                        .delete_instance(&instance.spec.zone, instance_id)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(
+                                name = %instance.name_any(),
+                                instance_id = %instance_id,
+                                "Successfully deleted Scaleway instance"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                name = %instance.name_any(),
+                                error = %e,
+                                "Failed to delete Scaleway instance"
+                            );
+                            return Err(e);
+                        }
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(
+                    // IAM Secret absent : skip the Scaleway DELETE and proceed to
+                    // finalizer removal. Permanently blocking deletion is worse than
+                    // potentially leaving a cloud resource — the admin can clean up
+                    // the Scaleway instance manually.
+                    tracing::warn!(
                         name = %instance.name_any(),
+                        instance_id = %instance_id,
                         error = %e,
-                        "Failed to delete Scaleway instance"
+                        "IAM Secret missing during deletion — skipping Scaleway API call, proceeding to finalizer removal"
                     );
-                    return Err(e);
                 }
             }
         }
