@@ -198,7 +198,8 @@ async fn test_missing_project_id_annotation_returns_config_error() {
 
     let err = result.unwrap_err();
     assert!(
-        err.to_string().contains("scaleway.mathieubodin.io/project-id"),
+        err.to_string()
+            .contains("scaleway.mathieubodin.io/project-id"),
         "Got: {}",
         err
     );
