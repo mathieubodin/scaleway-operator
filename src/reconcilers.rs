@@ -276,7 +276,10 @@ pub async fn reconcile_instance(
                 if let Err(patch_err) = update_status(&instance, &api, status).await {
                     tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after NotFound — will retry");
                 }
-                return Ok(Action::requeue(Duration::from_secs(5)));
+                // Requeue at 30s (not 5s) to allow Scaleway eventual consistency
+                // to propagate before find_instance_by_name runs on the next cycle.
+                // This prevents duplicate creation during short propagation windows.
+                return Ok(Action::requeue(Duration::from_secs(30)));
             }
             Err(e) => {
                 tracing::warn!(name = %instance.name_any(), error = %e, "Failed to sync instance status");

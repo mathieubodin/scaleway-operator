@@ -30,7 +30,9 @@
         "properties": { "existingSecret": { "type": "string", "minLength": 1 } },
         "required": ["existingSecret"]
       },
-      "then": {},
+      "then": {
+        "title": "External secret path — token and organizationId are read from existingSecret and may be omitted here. Providing them alongside existingSecret is harmless; the Helm template ignores inline values when existingSecret is set."
+      },
       "else": {
         "properties": {
           "token": { "type": "string", "minLength": 1 },
