@@ -49,9 +49,12 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
 
 # TARGETPLATFORM est injecté par docker buildx : "linux/amd64" ou "linux/arm64"
-ARG TARGETPLATFORM
+# Défaut linux/amd64 pour `docker build .` sans --platform
+ARG TARGETPLATFORM=linux/amd64
 
 COPY --from=builder /app/${TARGETPLATFORM} /usr/local/bin/scaleway-operator
+RUN test -f /usr/local/bin/scaleway-operator || \
+    (echo "ERROR: binary not found for platform ${TARGETPLATFORM}" && exit 1)
 
 RUN addgroup -S operator && adduser -S operator -G operator
 USER operator
