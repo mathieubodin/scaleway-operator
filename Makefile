@@ -1,6 +1,6 @@
 -include .env .env.local
 
-.PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status check-helm helm-template helm-crds-template helm-crds-package helm-package
+.PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -52,7 +52,16 @@ check-docker:
 		exit 1; \
 	}
 
-env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm ## Teste la conformite de l'environnement
+check-markdownlint:
+	@command -v markdownlint-cli2 >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: markdownlint-cli2 not found. Install with:"; \
+		echo "  npm install -g markdownlint-cli2"; \
+		echo ""; \
+		exit 1; \
+	}
+
+env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""
@@ -75,7 +84,7 @@ coverage: check-llvm-cov ## Teste l'application et produit un rapport JSON
 coverage-json: check-llvm-cov ## Teste l'application et produit un rapport JSON
 	cargo llvm-cov --json 2>/dev/null | jq "." > $(COVERAGE_DIR)/cov.json
 
-check: check-cargo check-helm ## Lint et format
+check: check-cargo check-helm check-markdownlint ## Lint et format
 	cargo fmt
 	cargo clippy -- -D warnings
 	cargo check
