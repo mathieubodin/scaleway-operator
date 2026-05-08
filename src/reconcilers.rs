@@ -97,7 +97,7 @@ pub async fn reconcile_instance(
 
     // 1. Suppression en priorité — avant tout lookup de ressources potentiellement absentes
     if instance.metadata.deletion_timestamp.is_some() {
-        return handle_deletion(&instance, &api, &ctx.scaleway_client).await;
+        return handle_deletion(&instance, &api, &ctx).await;
     }
 
     // 2. Obtenir le rôle Scaleway depuis la ressource NamespaceRole
@@ -111,7 +111,7 @@ pub async fn reconcile_instance(
                 "Cannot proceed without NamespaceRole"
             );
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -128,7 +128,7 @@ pub async fn reconcile_instance(
                     pid
                 ));
                 let mut status = instance.status.clone().unwrap_or_default();
-                status.error_message = Some(e.to_string());
+                status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 let _ = update_status(&instance, &api, status).await;
                 return Err(e);
@@ -142,7 +142,7 @@ pub async fn reconcile_instance(
                 "Cannot proceed without project_id from namespace annotation"
             );
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -177,7 +177,7 @@ pub async fn reconcile_instance(
         Err(e) => {
             tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -196,7 +196,7 @@ pub async fn reconcile_instance(
                 scaleway_role
             ));
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -227,7 +227,7 @@ pub async fn reconcile_instance(
                     Ok(id) => id,
                     Err(e) => {
                         tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
-                        status.error_message = Some(e.to_string());
+                        status.error_message = Some(e.for_status());
                         status.sync_state = "Error".to_string();
                         update_status(&instance, &api, status).await?;
                         return Err(e);
@@ -261,9 +261,19 @@ pub async fn reconcile_instance(
                 status.error_message = None;
                 update_status(&instance, &api, status).await?;
             }
+            Err(OperatorError::InstanceNotFound(_)) => {
+                tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
+                status.scaleway_id = None;
+                status.state = "unknown".to_string();
+                status.public_ip = None;
+                status.error_message = None;
+                status.sync_state = "Syncing".to_string();
+                update_status(&instance, &api, status).await?;
+                return Ok(Action::requeue(Duration::from_secs(5)));
+            }
             Err(e) => {
                 tracing::warn!(name = %instance.name_any(), error = %e, "Failed to sync instance status");
-                status.error_message = Some(e.to_string());
+                status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 update_status(&instance, &api, status).await?;
                 return Err(e);
@@ -277,7 +287,7 @@ pub async fn reconcile_instance(
 async fn handle_deletion(
     instance: &Instance,
     api: &Api<Instance>,
-    scaleway_client: &ScalewayClient,
+    ctx: &Arc<Context>,
 ) -> std::result::Result<Action, OperatorError> {
     tracing::info!(
         name = %instance.name_any(),
@@ -286,7 +296,9 @@ async fn handle_deletion(
 
     if let Some(status) = &instance.status {
         if let Some(instance_id) = &status.scaleway_id {
-            match scaleway_client
+            let namespace = instance.namespace().unwrap_or_default();
+            let ns_client = get_namespace_client(ctx, &namespace).await?;
+            match ns_client
                 .delete_instance(&instance.spec.zone, instance_id)
                 .await
             {

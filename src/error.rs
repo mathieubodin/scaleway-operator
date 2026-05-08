@@ -38,3 +38,23 @@ pub enum OperatorError {
 }
 
 pub type Result<T> = std::result::Result<T, OperatorError>;
+
+impl OperatorError {
+    /// Returns a sanitized message suitable for writing to CRD status.
+    /// For ScalewayError, extracts only the "message" field from the JSON body
+    /// to avoid exposing resource IDs or raw API response data to namespace readers.
+    /// Full error detail is preserved in to_string() for tracing/logging.
+    pub fn for_status(&self) -> String {
+        match self {
+            OperatorError::ScalewayError { status, message } => {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(message) {
+                    if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
+                        return format!("Scaleway API error: {} — {}", status, msg);
+                    }
+                }
+                format!("Scaleway API error: {}", status)
+            }
+            _ => self.to_string(),
+        }
+    }
+}
