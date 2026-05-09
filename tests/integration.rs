@@ -18,7 +18,7 @@ use std::sync::Arc;
 // ── Namespaces pré-créés par k8s/test-fixtures.yaml ──────────────────────────
 /// Namespace avec annotation UUID valide, sans NamespaceRole.
 const NS_NO_ROLE: &str = "scw-test-no-role";
-/// Namespace sans annotation scaleway.io/project-id, avec NamespaceRole Editor.
+/// Namespace sans annotation scaleway.mathieubodin.io/project-id, avec NamespaceRole Editor.
 const NS_NO_ANNOTATION: &str = "scw-test-no-annotation";
 /// Namespace avec annotation non-UUID, avec NamespaceRole Editor.
 const NS_INVALID_UUID: &str = "scw-test-invalid-uuid";
@@ -29,7 +29,7 @@ const NS_VIEWER: &str = "scw-test-viewer";
 /// Namespace Editor avec annotation valide et Secret IAM.
 const NS_EDITOR: &str = "scw-test-editor";
 
-const INSTANCE_FINALIZER: &str = "scaleway.io/instance-finalizer";
+const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -198,7 +198,8 @@ async fn test_missing_project_id_annotation_returns_config_error() {
 
     let err = result.unwrap_err();
     assert!(
-        err.to_string().contains("scaleway.io/project-id"),
+        err.to_string()
+            .contains("scaleway.mathieubodin.io/project-id"),
         "Got: {}",
         err
     );

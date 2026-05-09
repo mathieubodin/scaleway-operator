@@ -1,0 +1,27 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "scaleway-operator.fullname" . }}
+  labels:
+    {{- include "scaleway-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["scaleway.mathieubodin.io"]
+  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["scaleway.mathieubodin.io"]
+  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["scaleway.mathieubodin.io"]
+  resources: ["namespaceroles"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+{{- end }}

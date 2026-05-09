@@ -1,0 +1,24 @@
+apiVersion: v2
+name: scaleway-operator-crds
+description: Custom Resource Definitions for the Scaleway Kubernetes Operator
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - scaleway
+  - operator
+  - crds
+  - kubernetes
+home: https://github.com/mathieubodin/scaleway-operator
+sources:
+  - https://github.com/mathieubodin/scaleway-operator
+maintainers:
+  - name: mathieubodin
+    url: https://github.com/mathieubodin
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: source
+      url: https://github.com/mathieubodin/scaleway-operator
+    - name: support
+      url: https://github.com/mathieubodin/scaleway-operator/issues

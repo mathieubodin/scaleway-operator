@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "scaleway": {
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretTokenKey": { "type": "string" },
+        "existingSecretOrgIdKey": { "type": "string" }
+      },
+      "if": {
+        "properties": { "existingSecret": { "type": "string", "minLength": 1 } },
+        "required": ["existingSecret"]
+      },
+      "then": {
+        "title": "External secret path — token and organizationId are read from existingSecret and may be omitted here. Providing them alongside existingSecret is harmless; the Helm template ignores inline values when existingSecret is set."
+      },
+      "else": {
+        "properties": {
+          "token": { "type": "string", "minLength": 1 },
+          "organizationId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "minLength": 36
+          }
+        }
+      }
+    },
+    "namespaceBootstrap": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "projectId"],
+            "properties": {
+              "name": { "type": "string" },
+              "projectId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

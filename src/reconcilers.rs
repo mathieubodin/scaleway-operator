@@ -11,7 +11,7 @@ use kube::{api::PatchParams, Api, ResourceExt};
 use std::sync::Arc;
 use std::time::Duration;
 
-const INSTANCE_FINALIZER: &str = "scaleway.io/instance-finalizer";
+const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 /// Retourne true si le rôle autorise les opérations d'écriture sur les instances.
@@ -73,10 +73,10 @@ async fn get_project_id_from_namespace(instance: &Instance, ctx: &Arc<Context>) 
     extract_project_id_from_namespace(annotations).ok_or_else(|| {
         tracing::error!(
             namespace = %namespace,
-            "Namespace missing required annotation: scaleway.io/project-id"
+            "Namespace missing required annotation: scaleway.mathieubodin.io/project-id"
         );
         OperatorError::ConfigError(format!(
-            "Namespace '{}' must have annotation 'scaleway.io/project-id'",
+            "Namespace '{}' must have annotation 'scaleway.mathieubodin.io/project-id'",
             namespace
         ))
     })
@@ -97,7 +97,7 @@ pub async fn reconcile_instance(
 
     // 1. Suppression en priorité — avant tout lookup de ressources potentiellement absentes
     if instance.metadata.deletion_timestamp.is_some() {
-        return handle_deletion(&instance, &api, &ctx.scaleway_client).await;
+        return handle_deletion(&instance, &api, &ctx).await;
     }
 
     // 2. Obtenir le rôle Scaleway depuis la ressource NamespaceRole
@@ -111,7 +111,7 @@ pub async fn reconcile_instance(
                 "Cannot proceed without NamespaceRole"
             );
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -124,11 +124,11 @@ pub async fn reconcile_instance(
             // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
             if uuid::Uuid::parse_str(&pid).is_err() {
                 let e = OperatorError::ConfigError(format!(
-                    "Annotation 'scaleway.io/project-id' must be a valid UUID, got: '{}'",
+                    "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
                     pid
                 ));
                 let mut status = instance.status.clone().unwrap_or_default();
-                status.error_message = Some(e.to_string());
+                status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 let _ = update_status(&instance, &api, status).await;
                 return Err(e);
@@ -142,7 +142,7 @@ pub async fn reconcile_instance(
                 "Cannot proceed without project_id from namespace annotation"
             );
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -177,7 +177,7 @@ pub async fn reconcile_instance(
         Err(e) => {
             tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
@@ -196,16 +196,19 @@ pub async fn reconcile_instance(
                 scaleway_role
             ));
             let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.to_string());
+            status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             return Err(e);
         }
 
-        // Vérifier l'accès projet uniquement à la création (pas à chaque sync de 30s)
-        ctx.scaleway_client
-            .verify_project_access(&project_id)
-            .await?;
+        // Vérifier l'accès projet uniquement à la première création (status.project_id absent).
+        // Sauter lors d'une re-création après InstanceNotFound : le projet était déjà validé.
+        if status.project_id.is_none() {
+            ctx.scaleway_client
+                .verify_project_access(&project_id)
+                .await?;
+        }
 
         // Cherche d'abord une instance existante par nom : récupère une instance
         // orpheline si le status n'a pas pu être écrit lors d'une réconciliation précédente.
@@ -227,7 +230,7 @@ pub async fn reconcile_instance(
                     Ok(id) => id,
                     Err(e) => {
                         tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
-                        status.error_message = Some(e.to_string());
+                        status.error_message = Some(e.for_status());
                         status.sync_state = "Error".to_string();
                         update_status(&instance, &api, status).await?;
                         return Err(e);
@@ -261,9 +264,26 @@ pub async fn reconcile_instance(
                 status.error_message = None;
                 update_status(&instance, &api, status).await?;
             }
+            Err(OperatorError::InstanceNotFound(_)) => {
+                tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
+                status.scaleway_id = None;
+                status.state = "unknown".to_string();
+                status.public_ip = None;
+                status.project_id = None;
+                status.created_at = None;
+                status.error_message = None;
+                status.sync_state = "Syncing".to_string();
+                if let Err(patch_err) = update_status(&instance, &api, status).await {
+                    tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after NotFound — will retry");
+                }
+                // Requeue at 30s (not 5s) to allow Scaleway eventual consistency
+                // to propagate before find_instance_by_name runs on the next cycle.
+                // This prevents duplicate creation during short propagation windows.
+                return Ok(Action::requeue(Duration::from_secs(30)));
+            }
             Err(e) => {
                 tracing::warn!(name = %instance.name_any(), error = %e, "Failed to sync instance status");
-                status.error_message = Some(e.to_string());
+                status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 update_status(&instance, &api, status).await?;
                 return Err(e);
@@ -277,7 +297,7 @@ pub async fn reconcile_instance(
 async fn handle_deletion(
     instance: &Instance,
     api: &Api<Instance>,
-    scaleway_client: &ScalewayClient,
+    ctx: &Arc<Context>,
 ) -> std::result::Result<Action, OperatorError> {
     tracing::info!(
         name = %instance.name_any(),
@@ -286,24 +306,41 @@ async fn handle_deletion(
 
     if let Some(status) = &instance.status {
         if let Some(instance_id) = &status.scaleway_id {
-            match scaleway_client
-                .delete_instance(&instance.spec.zone, instance_id)
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        name = %instance.name_any(),
-                        instance_id = %instance_id,
-                        "Successfully deleted Scaleway instance"
-                    );
+            let namespace = instance.namespace().unwrap_or_default();
+            match get_namespace_client(ctx, &namespace).await {
+                Ok(ns_client) => {
+                    match ns_client
+                        .delete_instance(&instance.spec.zone, instance_id)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(
+                                name = %instance.name_any(),
+                                instance_id = %instance_id,
+                                "Successfully deleted Scaleway instance"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                name = %instance.name_any(),
+                                error = %e,
+                                "Failed to delete Scaleway instance"
+                            );
+                            return Err(e);
+                        }
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(
+                    // IAM Secret absent : skip the Scaleway DELETE and proceed to
+                    // finalizer removal. Permanently blocking deletion is worse than
+                    // potentially leaving a cloud resource — the admin can clean up
+                    // the Scaleway instance manually.
+                    tracing::warn!(
                         name = %instance.name_any(),
+                        instance_id = %instance_id,
                         error = %e,
-                        "Failed to delete Scaleway instance"
+                        "IAM Secret missing during deletion — skipping Scaleway API call, proceeding to finalizer removal"
                     );
-                    return Err(e);
                 }
             }
         }

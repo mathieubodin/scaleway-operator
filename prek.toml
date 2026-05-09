@@ -2,7 +2,8 @@ exclude = {
     glob = [
         "target/**",
         "docs/ideation/**",
-        "docs/plans/**"
+        "docs/plans/**",
+        "charts/**/templates/**"
     ]
 }
 

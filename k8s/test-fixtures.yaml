@@ -17,7 +17,7 @@ kind: Namespace
 metadata:
   name: scw-test-no-role
   annotations:
-    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+    scaleway.mathieubodin.io/project-id: "11111111-1111-1111-1111-111111111111"
   labels:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
@@ -32,7 +32,7 @@ metadata:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: scw-test-no-annotation
@@ -49,12 +49,12 @@ kind: Namespace
 metadata:
   name: scw-test-invalid-uuid
   annotations:
-    scaleway.io/project-id: "not-a-uuid"
+    scaleway.mathieubodin.io/project-id: "not-a-uuid"
   labels:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: scw-test-invalid-uuid
@@ -71,12 +71,12 @@ kind: Namespace
 metadata:
   name: scw-test-no-secret
   annotations:
-    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+    scaleway.mathieubodin.io/project-id: "11111111-1111-1111-1111-111111111111"
   labels:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: scw-test-no-secret
@@ -93,12 +93,12 @@ kind: Namespace
 metadata:
   name: scw-test-viewer
   annotations:
-    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+    scaleway.mathieubodin.io/project-id: "11111111-1111-1111-1111-111111111111"
   labels:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: scw-test-viewer
@@ -130,12 +130,12 @@ kind: Namespace
 metadata:
   name: scw-test-editor
   annotations:
-    scaleway.io/project-id: "11111111-1111-1111-1111-111111111111"
+    scaleway.mathieubodin.io/project-id: "11111111-1111-1111-1111-111111111111"
   labels:
     app.kubernetes.io/managed-by: scaleway-operator-test
 
 ---
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: NamespaceRole
 metadata:
   name: scw-test-editor

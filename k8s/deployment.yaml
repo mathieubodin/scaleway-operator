@@ -23,14 +23,14 @@ metadata:
   name: scaleway-operator
 rules:
 # CRDs Scaleway
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
   verbs: ["update"]
 # NamespaceRole (cluster-wide resource)
-- apiGroups: ["scaleway.io"]
+- apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["namespaceroles"]
   verbs: ["get", "list", "watch"]
 # ConfigMaps pour la configuration
@@ -114,7 +114,8 @@ spec:
         runAsUser: 65534
       containers:
       - name: operator
-        image: scaleway-operator:latest
+        # IMAGE_TAG est substitué via envsubst lors du déploiement (ex: IMAGE_TAG=v0.1.0 envsubst < deployment.yaml | kubectl apply -f -)
+        image: ghcr.io/mathieubodin/scaleway-operator:${IMAGE_TAG}
         imagePullPolicy: IfNotPresent
         env:
         - name: SCALEWAY_TOKEN

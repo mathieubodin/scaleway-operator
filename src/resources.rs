@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 // ============== Instance Resource ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.io", version = "v1", kind = "Instance")]
+#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "Instance")]
 #[kube(namespaced)]
 #[kube(status = "InstanceStatus")]
 #[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scalewayId"}"#)]
@@ -106,7 +106,7 @@ impl Default for InstanceStatus {
 
 #[allow(dead_code)]
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.io", version = "v1", kind = "Project")]
+#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "Project")]
 #[kube(namespaced)]
 #[kube(status = "ProjectStatus")]
 pub struct ProjectSpec {
@@ -151,7 +151,11 @@ impl Default for ProjectStatus {
 
 #[allow(dead_code)]
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.io", version = "v1", kind = "LoadBalancer")]
+#[kube(
+    group = "scaleway.mathieubodin.io",
+    version = "v1",
+    kind = "LoadBalancer"
+)]
 #[kube(namespaced)]
 #[kube(status = "LoadBalancerStatus")]
 pub struct LoadBalancerSpec {
@@ -204,7 +208,11 @@ impl Default for LoadBalancerStatus {
 // ============== NamespaceRole Resource (Cluster-wide) ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.io", version = "v1", kind = "NamespaceRole")]
+#[kube(
+    group = "scaleway.mathieubodin.io",
+    version = "v1",
+    kind = "NamespaceRole"
+)]
 #[kube(status = "NamespaceRoleStatus")]
 #[kube(printcolumn = r#"{"name":"Namespace","type":"string","jsonPath":".spec.namespace"}"#)]
 #[kube(printcolumn = r#"{"name":"Role","type":"string","jsonPath":".spec.scalewayRole"}"#)]

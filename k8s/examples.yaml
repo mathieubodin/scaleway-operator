@@ -5,7 +5,7 @@ kind: Namespace
 metadata:
   name: production
   annotations:
-    scaleway.io/project-id: "12345678-1234-1234-1234-123456789012"
+    scaleway.mathieubodin.io/project-id: "12345678-1234-1234-1234-123456789012"
     description: "Production namespace pour instances Scaleway"
 
 ---
@@ -15,12 +15,12 @@ kind: Namespace
 metadata:
   name: development
   annotations:
-    scaleway.io/project-id: "87654321-4321-4321-4321-210987654321"
+    scaleway.mathieubodin.io/project-id: "87654321-4321-4321-4321-210987654321"
     description: "Development namespace pour instances Scaleway"
 
 ---
 # Exemple 1: Instance simple en production
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: web-server
@@ -36,7 +36,7 @@ spec:
 
 ---
 # Exemple 2: Instance database en production
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: database-server
@@ -58,7 +58,7 @@ spec:
 
 ---
 # Exemple 3: Instance dev légère
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: dev-box
@@ -74,7 +74,7 @@ spec:
 
 ---
 # Exemple 4: Instance dans une autre région
-apiVersion: scaleway.io/v1
+apiVersion: scaleway.mathieubodin.io/v1
 kind: Instance
 metadata:
   name: eu-instance
@@ -96,7 +96,7 @@ spec:
 # metadata:
 #   name: no-annotation
 # ---
-# apiVersion: scaleway.io/v1
+# apiVersion: scaleway.mathieubodin.io/v1
 # kind: Instance
 # metadata:
 #   name: will-fail
@@ -106,4 +106,4 @@ spec:
 #   zone: fr-par-1
 #   image: ubuntu-jammy
 #   instance_type: DEV1-S
-# # Cette instance échouera : le namespace n'a pas l'annotation scaleway.io/project-id
+# # Cette instance échouera : le namespace n'a pas l'annotation scaleway.mathieubodin.io/project-id

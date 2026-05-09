@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: Release Please
+  # Crée et maintient une "Release PR" basée sur les commits conventionnels.
+  # Quand la PR est mergée : crée un tag Git sémantique + une GitHub Release.
+  # ────────────────────────────────────────────────────────────────────────────
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name:        ${{ steps.release.outputs.tag_name }}
+      version:         ${{ steps.release.outputs.version }}
+      sha:             ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071  # v4
+        id: release
+        with:
+          token:         ${{ secrets.GITHUB_TOKEN }}
+          config-file:   release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: Build multi-arch + push GHCR + cosign signing
+  # Déclenché UNIQUEMENT quand release-please a créé une release.
+  # ────────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+
+      # Buildx requis pour --platform multi-arch
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      # Login GHCR via GITHUB_TOKEN (OIDC natif, zéro secret à gérer)
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Génération des tags OCI : semver (vX.Y.Z, vX.Y, vX), latest, sha court
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=scaleway-operator
+            org.opencontainers.image.description=Kubernetes operator for Scaleway resources
+            org.opencontainers.image.vendor=Scaleway
+
+      # Build multi-arch + push GHCR
+      # cargo-chef + cargo-zigbuild dans le Dockerfile :
+      #   linux/amd64 → x86_64-unknown-linux-musl (natif sur runner CI)
+      #   linux/arm64 → aarch64-unknown-linux-musl (cross-compilé, pas de QEMU)
+      - name: Build and push
+        id: build-and-push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags:    ${{ steps.meta.outputs.tags }}
+          labels:  ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # Cosign keyless signing (Fulcio/Rekor, OIDC GHA, zéro gestion de clé)
+      # La signature est attachée au digest immuable, pas au tag mutable
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
+
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          TAGS:   ${{ steps.meta.outputs.tags }}
+        run: |
+          images=""
+          while IFS= read -r tag; do
+            images+="${tag}@${DIGEST} "
+          done <<< "${TAGS}"
+          cosign sign --yes ${images}
+
+      # Attestation de provenance SLSA Level 2 (GitHub-natif)
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-name:   ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      # Publication des Helm charts en OCI sur GHCR
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4  # v4
+
+      - name: Log in to GHCR Helm registry
+        run: |
+          helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create chart output directory
+        run: mkdir -p target/charts
+
+      - name: Package and push scaleway-operator-crds chart
+        run: |
+          CHART_VERSION=$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}')
+          if [ -z "$CHART_VERSION" ]; then
+            echo "ERROR: Could not determine chart version from charts/scaleway-operator-crds/Chart.yaml" >&2
+            exit 1
+          fi
+          helm package charts/scaleway-operator-crds --destination target/charts/
+          for attempt in 1 2 3; do
+            helm push "target/charts/scaleway-operator-crds-${CHART_VERSION}.tgz" \
+              oci://ghcr.io/${{ github.repository_owner }}/charts && break
+            [ "$attempt" -lt 3 ] && echo "Push attempt $attempt failed, retrying…" && sleep 10
+          done
+
+      - name: Package and push scaleway-operator chart
+        run: |
+          CHART_VERSION=$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}')
+          if [ -z "$CHART_VERSION" ]; then
+            echo "ERROR: Could not determine chart version from charts/scaleway-operator/Chart.yaml" >&2
+            exit 1
+          fi
+          helm package charts/scaleway-operator --destination target/charts/
+          for attempt in 1 2 3; do
+            helm push "target/charts/scaleway-operator-${CHART_VERSION}.tgz" \
+              oci://ghcr.io/${{ github.repository_owner }}/charts && break
+            [ "$attempt" -lt 3 ] && echo "Push attempt $attempt failed, retrying…" && sleep 10
+          done

@@ -1,13 +1,19 @@
 -include .env .env.local
 
-.PHONY: help build coverage-json check image-build image-push deploy deploy-crd deploy-status
+.PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
 
-REGISTRY ?= docker.io
+REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
 IMAGE_TAG ?= latest
 FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 COVERAGE_DIR = target/llvm-cov
+
+KUBECONFIG ?= .kube/config
+HELM_EXTRA_FLAGS ?=
+
+CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml 2>/dev/null | awk '{print $$2}')
+CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml 2>/dev/null | awk '{print $$2}')
 
 help: ## Affiche cette aide
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} \
@@ -52,7 +58,16 @@ check-docker:
 		exit 1; \
 	}
 
-env-check: check-cargo check-llvm-cov check-kubectl check-docker ## Teste la conformite de l'environnement
+check-markdownlint:
+	@command -v markdownlint-cli2 >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: markdownlint-cli2 not found. Install with:"; \
+		echo "  npm install -g markdownlint-cli2"; \
+		echo ""; \
+		exit 1; \
+	}
+
+env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""
@@ -65,21 +80,25 @@ test: check-cargo
 
 KUBE_API_URL ?= http://127.0.0.1:8001
 
-test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crd + kubectl proxy sur :8001)
+test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crds + kubectl proxy sur :8001)
 	KUBE_API_URL=$(KUBE_API_URL) cargo test --test integration -- --ignored
 
-coverage: check-llvm-cov ## Teste l'application et produit un rapport JSON
+coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	cargo llvm-cov --html 2>/dev/null
 	@echo "Report: $(COVERAGE_DIR)/html/index.html"
 
 coverage-json: check-llvm-cov ## Teste l'application et produit un rapport JSON
 	cargo llvm-cov --json 2>/dev/null | jq "." > $(COVERAGE_DIR)/cov.json
 
-check: check-cargo ## Lint et format
+check: check-cargo check-helm check-markdownlint ## Lint et format
 	cargo fmt
 	cargo clippy -- -D warnings
 	cargo check
 	markdownlint-cli2
+	helm lint charts/scaleway-operator-crds/
+	helm lint charts/scaleway-operator/ \
+		--set scaleway.token=placeholder \
+		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
 
 image-build: ## Construit l'image
 	docker build -t $(FULL_IMAGE) .
@@ -94,29 +113,69 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
 	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
 
-deploy-crd: ## Deploie les CustomResourceDefinitions de l'operateur
-	@echo "Deploying CRDs..."
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-instance.yaml
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-namespacerole.yaml
-	kubectl --kubeconfig=.kube/config apply -f k8s/crd-project.yaml
-	@echo "CRDs deployed successfully"
+.PHONY: .check-chart-versions
+.check-chart-versions:
+	$(if $(CHART_CRDS_VERSION),,$(error Cannot determine CHART_CRDS_VERSION from charts/scaleway-operator-crds/Chart.yaml))
+	$(if $(CHART_OP_VERSION),,$(error Cannot determine CHART_OP_VERSION from charts/scaleway-operator/Chart.yaml))
 
-deploy: deploy-crd ## Deploie l'operateur avec ses CustomResourceDefinitions
-	@echo "Deploying operator..."
-	kubectl --kubeconfig=.kube/config apply -f k8s/deployment.yaml
-	@echo "Operator deployed. Waiting for rollout..."
-	kubectl --kubeconfig=.kube/config rollout status deployment/scaleway-operator -n scaleway-system
+deploy-crds: helm-crds-package .check-chart-versions ## Deploie les CRDs via le chart Helm packagé localement
+	@test -f target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz || \
+		(echo "Run make helm-crds-package first" && exit 1)
+	helm upgrade --install scaleway-operator-crds \
+		target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz \
+		--kubeconfig $(KUBECONFIG) \
+		$(HELM_EXTRA_FLAGS)
+
+deploy: helm-package .check-chart-versions ## Deploie l'operateur via le chart Helm packagé localement
+	@test -f target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz || \
+		(echo "Run make helm-package first" && exit 1)
+	helm upgrade --install scaleway-operator \
+		target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz \
+		--kubeconfig $(KUBECONFIG) \
+		--namespace scaleway-system \
+		--create-namespace \
+		$(HELM_EXTRA_FLAGS)
 
 deploy-status: ## Affiche le status de l'operateur dans Kubernetes
-	@echo "=== Operator Deployment ==="
-	kubectl --kubeconfig .kube/config -n scaleway-system get deployment
+	@echo "=== Helm Releases ==="
+	helm list --all-namespaces --kubeconfig $(KUBECONFIG)
+	@echo ""
+	@echo "=== Operator Release ==="
+	helm status scaleway-operator --namespace scaleway-system --kubeconfig $(KUBECONFIG) 2>/dev/null || \
+		echo "(release scaleway-operator not found)"
 	@echo ""
 	@echo "=== Operator Pods ==="
-	kubectl --kubeconfig .kube/config -n scaleway-system get pods
+	kubectl --kubeconfig $(KUBECONFIG) -n scaleway-system get pods
 	@echo ""
 	@echo "=== CRDs ==="
-	kubectl --kubeconfig .kube/config get crds -l io.scaleway.k8s.crd.schema.version
+	kubectl --kubeconfig $(KUBECONFIG) get crds -l io.mathieubodin.scaleway.k8s.crd.schema.version
 
 clean: ## Nettoyer les artefacts localement
 	cargo clean
 	rm -rf target/
+
+check-helm: ## Vérifie que helm est installé
+	@command -v helm >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: helm not found. Install with:"; \
+		echo "  brew install helm"; \
+		echo ""; \
+		exit 1; \
+	}
+
+helm-crds-package: .check-chart-versions ## Package le chart CRDs dans target/charts/
+	@mkdir -p target/charts
+	helm package charts/scaleway-operator-crds/ --destination target/charts/
+
+helm-package: .check-chart-versions ## Package le chart opérateur dans target/charts/
+	@mkdir -p target/charts
+	helm package charts/scaleway-operator/ --destination target/charts/
+
+helm-crds-template: ## Afficher les manifests générés par le chart CRDs
+	helm template scaleway-operator-crds charts/scaleway-operator-crds/
+
+helm-template: ## Afficher les manifests générés par le chart opérateur
+	helm template scaleway-operator charts/scaleway-operator/ \
+		--set scaleway.token=placeholder \
+		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000 \
+		--namespace scaleway-system
