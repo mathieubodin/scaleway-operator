@@ -303,12 +303,12 @@ pub async fn reconcile_instance(
         status.error_message = None;
         status.project_id = Some(project_id.clone());
 
-        update_status(&instance, &api, status.clone()).await?;
         if adopted {
             measurer.set_outcome(ReconcileOutcome::Adopted);
         } else {
             measurer.set_outcome(ReconcileOutcome::Created);
         }
+        update_status(&instance, &api, status.clone()).await?;
         return Ok(Action::requeue(Duration::from_secs(10)));
     }
 
@@ -324,6 +324,7 @@ pub async fn reconcile_instance(
                 status.project_id = Some(project_id.clone());
                 status.sync_state = "Synced".to_string();
                 status.error_message = None;
+                measurer.set_outcome(ReconcileOutcome::Synced);
                 update_status(&instance, &api, status).await?;
             }
             Err(OperatorError::InstanceNotFound(_)) => {
@@ -355,7 +356,6 @@ pub async fn reconcile_instance(
         }
     }
 
-    measurer.set_outcome(ReconcileOutcome::Synced);
     Ok(Action::requeue(Duration::from_secs(30)))
 }
 
@@ -723,6 +723,31 @@ mod tests {
             stored >= before && stored <= after,
             "last_reconcile_at should be a recent Unix timestamp for Created outcome"
         );
+    }
+
+    /// set_outcome(Adopted) MUST update last_reconcile_at.
+    #[test]
+    fn test_measurer_adopted_outcome_updates_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Adopted);
+        }
+        let stored = last_reconcile_at.load(Ordering::Relaxed);
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            stored >= before && stored <= after,
+            "last_reconcile_at should be a recent Unix timestamp for Adopted outcome"
+        );
+        assert_eq!(histogram_sample_count(&metrics, "Adopted"), 1);
     }
 
     /// set_outcome(Deleted) MUST update last_reconcile_at.

@@ -245,21 +245,25 @@ mod tests {
     }
 
     #[test]
-    fn test_record_error_network_error() {
-        // Build a reqwest::Error via a known-invalid URL to avoid hitting the network.
+    fn test_record_error_serialization_error() {
         let registry = fresh_registry();
         let metrics = OperatorMetrics::new(&registry).unwrap();
-
-        // We can't easily construct reqwest::Error directly, so we use Unknown as a proxy
-        // and verify the NetworkError arm by using serde_json::Error to get SerializationError.
-        // For NetworkError specifically, test the variant_name function directly.
-        // We'll use a workaround: parse a definitely-invalid JSON to construct
-        // a SerializationError, then manually test variant_name with a string check.
-        let serialization_err: Result<serde_json::Value, _> =
-            serde_json::from_str("not json");
-        let err = OperatorError::SerializationError(serialization_err.unwrap_err());
+        let err = OperatorError::SerializationError(
+            serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+        );
         metrics.record_error(&err);
         assert_counter_value(&metrics, "SerializationError", 1);
+    }
+
+    #[test]
+    fn test_record_error_network_error() {
+        // reqwest::Error via an invalid URL scheme — no network call, fails at request build time.
+        let registry = fresh_registry();
+        let metrics = OperatorMetrics::new(&registry).unwrap();
+        let reqwest_err = reqwest::blocking::get("not-a-valid-url://host").unwrap_err();
+        let err = OperatorError::NetworkError(reqwest_err);
+        metrics.record_error(&err);
+        assert_counter_value(&metrics, "NetworkError", 1);
     }
 
     #[test]
