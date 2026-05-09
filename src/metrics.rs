@@ -14,15 +14,21 @@ pub enum ReconcileOutcome {
     Error,
 }
 
+impl ReconcileOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReconcileOutcome::Created => "Created",
+            ReconcileOutcome::Synced => "Synced",
+            ReconcileOutcome::Adopted => "Adopted",
+            ReconcileOutcome::Deleted => "Deleted",
+            ReconcileOutcome::Error => "Error",
+        }
+    }
+}
+
 impl fmt::Display for ReconcileOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ReconcileOutcome::Created => write!(f, "Created"),
-            ReconcileOutcome::Synced => write!(f, "Synced"),
-            ReconcileOutcome::Adopted => write!(f, "Adopted"),
-            ReconcileOutcome::Deleted => write!(f, "Deleted"),
-            ReconcileOutcome::Error => write!(f, "Error"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -77,7 +83,7 @@ impl OperatorMetrics {
     /// Observe a reconcile duration for the given outcome.
     pub fn record_duration(&self, outcome: &ReconcileOutcome, duration_secs: f64) {
         self.reconcile_duration_seconds
-            .with_label_values(&[&outcome.to_string()])
+            .with_label_values(&[outcome.as_str()])
             .observe(duration_secs);
     }
 }
