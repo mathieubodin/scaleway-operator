@@ -1,6 +1,6 @@
 use std::fmt;
 
-use prometheus::{Histogram, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry};
+use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry};
 
 use crate::error::OperatorError;
 
@@ -31,13 +31,8 @@ impl fmt::Display for ReconcileOutcome {
 /// `OperatorMetrics` is `Send + Sync` because both `IntCounterVec` and `HistogramVec`
 /// from the `prometheus` crate implement those traits.
 pub struct OperatorMetrics {
-    /// `scaleway_operator_reconcile_errors_total{error_variant="<PascalCase>"}` — incremented
-    /// each time a reconcile loop returns an error.
-    pub reconcile_errors_total: IntCounterVec,
-
-    /// `scaleway_operator_reconcile_duration_seconds{outcome="<ReconcileOutcome>"}` — records
-    /// the wall-clock duration of every reconcile loop iteration.
-    pub reconcile_duration_seconds: HistogramVec,
+    pub(crate) reconcile_errors_total: IntCounterVec,
+    pub(crate) reconcile_duration_seconds: HistogramVec,
 }
 
 impl OperatorMetrics {
@@ -72,11 +67,10 @@ impl OperatorMetrics {
         })
     }
 
-    /// Increment the error counter for the PascalCase variant name of `error`.
+    /// Increment the error counter using the error's metric label.
     pub fn record_error(&self, error: &OperatorError) {
-        let variant = variant_name(error);
         self.reconcile_errors_total
-            .with_label_values(&[variant])
+            .with_label_values(&[error.metric_label()])
             .inc();
     }
 
@@ -85,29 +79,6 @@ impl OperatorMetrics {
         self.reconcile_duration_seconds
             .with_label_values(&[&outcome.to_string()])
             .observe(duration_secs);
-    }
-
-    /// Return a `prometheus::Histogram` for a specific outcome label (convenience wrapper).
-    pub fn duration_histogram(&self, outcome: &ReconcileOutcome) -> Histogram {
-        self.reconcile_duration_seconds
-            .with_label_values(&[&outcome.to_string()])
-    }
-}
-
-/// Map an [`OperatorError`] variant to its PascalCase name for use as a Prometheus label.
-fn variant_name(error: &OperatorError) -> &'static str {
-    match error {
-        OperatorError::KubeError(_) => "KubeError",
-        OperatorError::ScalewayError { .. } => "ScalewayError",
-        OperatorError::ProjectAccessDenied(_) => "ProjectAccessDenied",
-        OperatorError::InstanceNotFound(_) => "InstanceNotFound",
-        OperatorError::InvalidZone(_) => "InvalidZone",
-        OperatorError::InvalidInstanceType(_) => "InvalidInstanceType",
-        OperatorError::ConfigError(_) => "ConfigError",
-        OperatorError::NetworkError(_) => "NetworkError",
-        OperatorError::SerializationError(_) => "SerializationError",
-        OperatorError::FinalizationError(_) => "FinalizationError",
-        OperatorError::Unknown(_) => "Unknown",
     }
 }
 

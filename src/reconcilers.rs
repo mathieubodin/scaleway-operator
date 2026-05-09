@@ -54,7 +54,7 @@ impl Drop for ReconcileMeasurer<'_> {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            self.last_reconcile_at.store(now_secs, Ordering::Relaxed);
+            self.last_reconcile_at.store(now_secs, Ordering::Release);
         }
     }
 }
@@ -622,6 +622,12 @@ mod tests {
         OperatorMetrics::new(&prometheus::Registry::new()).unwrap()
     }
 
+    fn histogram_sample_count(metrics: &OperatorMetrics, outcome_label: &str) -> u64 {
+        metrics.reconcile_duration_seconds
+            .with_label_values(&[outcome_label])
+            .get_sample_count()
+    }
+
     /// Drop without set_outcome defaults to Error and records a duration observation.
     #[test]
     fn test_measurer_drop_without_outcome_defaults_to_error() {
@@ -632,8 +638,7 @@ mod tests {
             // drop without set_outcome
         }
         // Duration should have been observed under the "Error" label
-        let histogram = metrics.duration_histogram(&ReconcileOutcome::Error);
-        assert_eq!(histogram.get_sample_count(), 1,
+        assert_eq!(histogram_sample_count(&metrics, "Error"), 1,
             "Error histogram should have 1 observation after drop-without-outcome");
     }
 
@@ -693,8 +698,7 @@ mod tests {
             stored, before, after
         );
         // Duration must also be observed under the Synced label
-        let histogram = metrics.duration_histogram(&ReconcileOutcome::Synced);
-        assert_eq!(histogram.get_sample_count(), 1);
+        assert_eq!(histogram_sample_count(&metrics, "Synced"), 1);
     }
 
     /// set_outcome(Created) MUST update last_reconcile_at.
