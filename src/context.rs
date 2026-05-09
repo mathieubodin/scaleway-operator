@@ -8,6 +8,8 @@ pub struct Context {
     pub scaleway_client: ScalewayClient,
     pub organization_id: String,
     pub scaleway_base_url: String,
+    pub metrics: crate::metrics::OperatorMetrics,
+    pub last_reconcile_at: std::sync::atomic::AtomicI64,
 }
 
 /// Extraire le project_id depuis une annotation de namespace

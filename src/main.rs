@@ -27,11 +27,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let organization_id =
         std::env::var("SCALEWAY_ORG_ID").expect("SCALEWAY_ORG_ID env var must be set");
 
+    let registry = prometheus::Registry::new();
+    let metrics = scaleway_operator::metrics::OperatorMetrics::new(&registry)
+        .expect("failed to register metrics");
+    let registry = Arc::new(registry);
+
     let context = Arc::new(Context {
         client: client.clone(),
         scaleway_client: ScalewayClient::new(scaleway_token),
         organization_id,
         scaleway_base_url: "https://api.scaleway.com".to_string(),
+        metrics,
+        last_reconcile_at: std::sync::atomic::AtomicI64::new(0),
     });
 
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");
