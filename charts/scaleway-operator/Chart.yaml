@@ -1,8 +1,9 @@
 apiVersion: v2
 name: scaleway-operator
-description: Kubernetes operator reconciling Scaleway cloud resources (instances, projects, load balancers)
+description: Kubernetes operator reconciling Scaleway cloud resources
+  (instances, projects, load balancers)
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 keywords:
   - scaleway
