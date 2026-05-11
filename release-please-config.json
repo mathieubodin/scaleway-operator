@@ -11,7 +11,7 @@
       "prerelease": false
     },
     "charts/scaleway-operator-crds": {
-      "changelog-path": "charts/scaleway-operator-crds/CHANGELOG.md",
+      "changelog-path": "CHANGELOG.md",
       "release-type": "helm",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
@@ -19,7 +19,7 @@
       "prerelease": false
     },
     "charts/scaleway-operator": {
-      "changelog-path": "charts/scaleway-operator/CHANGELOG.md",
+      "changelog-path": "CHANGELOG.md",
       "release-type": "helm",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
