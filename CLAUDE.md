@@ -18,6 +18,7 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 - Verifier l'etat du deploiement          : `make deploy-status`
 
 **Prérequis pour les targets deploy :**
+
 - Kubeconfig : préférer `KUBECONFIG=~/.kube/config make deploy-crds` (standard).
   `.kube/config` à la racine du repo fonctionne aussi mais ne doit jamais être commité
   (credentials cluster — déjà dans `.gitignore`).

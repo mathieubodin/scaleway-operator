@@ -1,5 +1,7 @@
 -include .env .env.local
 
+## Do not expose in .PHONY, targets without a ## description
+
 .PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
 
 REGISTRY ?= ghcr.io/mathieubodin
@@ -11,6 +13,7 @@ COVERAGE_DIR = target/llvm-cov
 
 KUBECONFIG ?= .kube/config
 HELM_EXTRA_FLAGS ?=
+KUBE_PROXY_PID_FILE ?= /tmp/.scaleway-operator-kube-proxy.pid
 
 CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml 2>/dev/null | awk '{print $$2}')
 CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml 2>/dev/null | awk '{print $$2}')
@@ -50,6 +53,24 @@ check-kubectl:
 		exit 1; \
 	}
 
+check-kubeconfig: check-kubectl
+	@test -f $(KUBECONFIG) || { \
+		echo ""; \
+		echo "Error: kubeconfig not found at '$(KUBECONFIG)'."; \
+		echo ""; \
+		echo "Options:"; \
+		echo "  Standard kubeconfig : KUBECONFIG=~/.kube/config make <target>"; \
+		echo "  Copie locale (gitignored) : cp ~/.kube/config .kube/config"; \
+		echo ""; \
+		exit 1; \
+	}
+	@kubectl --kubeconfig=$(KUBECONFIG) config view >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: kubeconfig at '$(KUBECONFIG)' is not a valid kubeconfig file."; \
+		echo ""; \
+		exit 1; \
+	}
+
 check-docker:
 	@command -v docker version >/dev/null 2>&1 || { \
 		echo ""; \
@@ -67,7 +88,7 @@ check-markdownlint:
 		exit 1; \
 	}
 
-env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
+env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""
@@ -80,8 +101,21 @@ test: check-cargo
 
 KUBE_API_URL ?= http://127.0.0.1:8001
 
+start-local-kubeapi: check-kubeconfig check-kubectl
+	@kubectl --kubeconfig=$(KUBECONFIG) proxy --port 8001 & echo $$! > $(KUBE_PROXY_PID_FILE)
+	@sleep 1
+
 test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crds + kubectl proxy sur :8001)
 	KUBE_API_URL=$(KUBE_API_URL) cargo test --test integration -- --ignored
+
+run-integration-test-locally: check-cargo check-kubeconfig deploy-crds deploy-test-fixtures test-integration
+	@if [ -f $(KUBE_PROXY_PID_FILE) ]; then \
+		kill $$(cat $(KUBE_PROXY_PID_FILE)) 2>/dev/null || true; \
+		rm -f $(KUBE_PROXY_PID_FILE); \
+		echo "kubectl proxy stopped"; \
+	else \
+		pkill -f "kubectl.*proxy.*8001" 2>/dev/null || true; \
+	fi
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	cargo llvm-cov --html 2>/dev/null
@@ -111,7 +145,7 @@ generate-crds: check-cargo ## Génère les manifests CRD depuis le code Rust (sr
 	@echo "CRDs generated in k8s/"
 
 deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (une seule fois)
-	kubectl --kubeconfig=.kube/config apply -f k8s/test-fixtures.yaml
+	kubectl --kubeconfig=$(KUBECONFIG) apply -f k8s/test-fixtures.yaml
 
 .PHONY: .check-chart-versions
 .check-chart-versions:
