@@ -27,6 +27,27 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 - Pour forcer une mise à jour helm (cas de récupération) :
   `HELM_EXTRA_FLAGS=--force make deploy-crds`
 
+**RBAC requis sur le cluster (à appliquer une fois par cluster) :**
+
+`helm upgrade --install` stocke son état de release comme des Secrets dans le namespace
+`scaleway-system`, et les CRDs sont des ressources cluster-scoped. L'utilisateur Kubernetes
+doit avoir les droits suivants :
+
+| Scope | Ressource | Verbes |
+|---|---|---|
+| Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
+| Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
+
+Un manifest prêt à l'emploi est disponible dans `k8s/rbac-helm-deploy.yaml`.
+Remplacer `<USER>` par le nom d'utilisateur Kubernetes du déployeur, puis :
+
+```bash
+kubectl apply -f k8s/rbac-helm-deploy.yaml
+```
+
+Sur Scaleway Kapsule, le nom d'utilisateur est de la forme
+`scaleway:bearer:<uuid-du-token-iam>`.
+
 ## Architecture
 
 Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il réconcilie des Custom Resources Scaleway avec l'API Scaleway.

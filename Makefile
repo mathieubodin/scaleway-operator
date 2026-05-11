@@ -155,10 +155,12 @@ deploy-test-fixtures: ## Deploie les namespaces/NamespaceRoles/Secrets de test (
 deploy-crds: helm-crds-package .check-chart-versions ## Deploie les CRDs via le chart Helm packagé localement
 	@test -f target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz || \
 		(echo "Run make helm-crds-package first" && exit 1)
-	helm template scaleway-operator-crds \
+	helm upgrade --install scaleway-operator-crds \
 		target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz \
-		$(HELM_EXTRA_FLAGS) \
-		| kubectl --kubeconfig $(KUBECONFIG) apply --server-side -f -
+		--kubeconfig $(KUBECONFIG) \
+		--namespace scaleway-system \
+		--create-namespace \
+		$(HELM_EXTRA_FLAGS)
 
 deploy: helm-package .check-chart-versions ## Deploie l'operateur via le chart Helm packagé localement
 	@test -f target/charts/scaleway-operator-$(CHART_OP_VERSION).tgz || \
