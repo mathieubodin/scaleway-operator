@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.4...scaleway-operator-v0.1.5) (2026-05-11)
+
+
+### Bug Fixes
+
+* **server:** initialize last_reconcile_at to now at startup ([0f796e6](https://github.com/mathieubodin/scaleway-operator/commit/0f796e6b62eb1115099879788b67f5be42b21d5c))
+* **server:** trigger rebuild for readyz startup fix ([bd8a65a](https://github.com/mathieubodin/scaleway-operator/commit/bd8a65aa4e2216b122472f5add870064ca42c67c))
+
 ## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.3...scaleway-operator-v0.1.4) (2026-05-11)
 
 
