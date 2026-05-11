@@ -158,6 +158,8 @@ deploy-crds: helm-crds-package .check-chart-versions ## Deploie les CRDs via le 
 	helm upgrade --install scaleway-operator-crds \
 		target/charts/scaleway-operator-crds-$(CHART_CRDS_VERSION).tgz \
 		--kubeconfig $(KUBECONFIG) \
+		--namespace scaleway-system \
+		--create-namespace \
 		$(HELM_EXTRA_FLAGS)
 
 deploy: helm-package .check-chart-versions ## Deploie l'operateur via le chart Helm packagé localement
