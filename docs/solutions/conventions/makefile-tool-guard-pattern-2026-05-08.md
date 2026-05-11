@@ -59,7 +59,7 @@ check: check-cargo check-helm check-markdownlint ## Lint et format
 **env-check lists all guards as prerequisites:**
 
 ```makefile
-env-check: check-cargo check-llvm-cov check-kubectl check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
+env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""

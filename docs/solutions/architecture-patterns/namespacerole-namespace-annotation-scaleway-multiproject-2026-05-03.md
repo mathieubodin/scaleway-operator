@@ -146,17 +146,9 @@ pub async fn reconcile_instance(
 }
 ```
 
-Le `scaleway_role` est traduit en `permission_sets` Scaleway IAM :
+Le `scaleway_role` détermine si l'opérateur peut écrire dans le namespace via `role_allows_write()` :
 
 ```rust
-fn role_to_permission_sets(role: &str) -> &'static [&'static str] {
-    match role {
-        "Editor" | "Admin" | "OrganizationOwner" => &["InstancesFullAccess"],
-        "Viewer" | "SecurityResponsible" | "BillingViewer" | "BillingManager" => &["InstancesReadOnly"],
-        _ => &["InstancesReadOnly"], // défaut conservatif
-    }
-}
-
 fn role_allows_write(role: &str) -> bool {
     matches!(role, "Editor" | "Admin" | "OrganizationOwner")
 }
@@ -258,7 +250,5 @@ Toute `Instance` dans ce namespace sera bloquée à la création avec :
 
 - `src/context.rs` — `get_scaleway_role_for_namespace()`, `extract_project_id_from_namespace()`
 - `src/resources.rs` — struct `NamespaceRoleSpec`, CRD definition
-- `src/reconcilers.rs` — `reconcile_instance()`, `role_to_permission_sets()`, `role_allows_write()`
-- `k8s/crd-namespacerole.yaml` — manifeste CRD Kubernetes
-- `NAMESPACE_ROLES.md` — guide opérationnel complet (cas d'usage, troubleshooting, FAQ)
-- `NAMESPACE_PROJECTS.md` — guide opérationnel annotation `scaleway.mathieubodin.io/project-id`
+- `src/reconcilers.rs` — `reconcile_instance()`, `role_allows_write()`
+- `charts/scaleway-operator-crds/templates/crd-namespacerole.yaml` — manifeste CRD Kubernetes (Helm chart)

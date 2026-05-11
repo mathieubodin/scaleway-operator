@@ -144,4 +144,4 @@ Le modèle de menace passe de "l'opérateur peut devenir admin Scaleway" à "l'o
 - `src/reconcilers.rs` — `get_namespace_client()` (nouveau), anciennement `get_or_provision_namespace_client()`
 - `src/scaleway.rs` — section IAM supprimée
 - `docs/solutions/architecture-patterns/namespacerole-namespace-annotation-scaleway-multiproject-2026-05-03.md` — pattern NamespaceRole (context de ce fix)
-- `SETUP.md` — mis à jour avec les permissions correctes (sans `IAMManager`)
+- `README.md` — section Prérequis liste les permissions correctes (`InstancesFullAccess` + `ProjectReadOnly`, sans `IAMManager`)
