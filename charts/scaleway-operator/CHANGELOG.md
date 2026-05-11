@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.3...scaleway-operator-v0.1.4) (2026-05-11)
+
+
+### Bug Fixes
+
+* **docker:** trigger rebuild with numeric UID fix ([3f1fc1c](https://github.com/mathieubodin/scaleway-operator/commit/3f1fc1c9682c5416541133a9894b549f802f4026))
+
 ## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.2...scaleway-operator-v0.1.3) (2026-05-11)
 
 

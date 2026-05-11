@@ -1,5 +1,5 @@
 {
-  ".": "0.1.3",
-  "charts/scaleway-operator-crds": "0.1.3",
-  "charts/scaleway-operator": "0.1.3"
+  ".": "0.1.4",
+  "charts/scaleway-operator-crds": "0.1.4",
+  "charts/scaleway-operator": "0.1.4"
 }
