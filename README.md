@@ -15,32 +15,47 @@ Un opérateur Kubernetes moderne écrit en **Rust** pour gérer les ressources S
 
 ## 📋 Prérequis
 
-- Kubernetes 1.19+
+- Kubernetes 1.35+
+- Helm 3.8+ (support des registres OCI requis)
 - Token API Scaleway avec les permission sets IAM suivants :
   - `InstancesFullAccess` (scope projet) — créer, lire, supprimer des instances
   - `ProjectReadOnly` (scope organisation) — vérifier l'accès au projet cible
-- Rust 1.70+ (pour le build)
 
 ## 🛠️ Installation
 
-Trois étapes :
+Quatre étapes :
 
 1. Déploiement des CustomResourceDefinitions.
 2. Fournir les informations de connexion à l'API Scaleway pour l'opérateur.
 3. Déploiement de l'opérateur lui-même.
+4. Vérifier l'installation.
 
-Ces étapes nécessitent des permissions sur le namespace de l'opérateur, par convention `scaleway-system`.
-Utiliser un compte administrateur du cluster. Voir `k8s/rbac-helm-deploy.yaml` pour les RBAC requis.
+Ces étapes nécessitent des droits cluster-admin (ou équivalent) sur le cluster cible.
+
+### Prérequis
+
+**Techniques :**
+- Kubernetes 1.35+ avec droits cluster-admin
+- Helm 3.8+ (support des registres OCI requis)
+
+**Credentials Scaleway :**
+
+Vous aurez besoin de deux valeurs :
+- **Token IAM** : Console Scaleway → IAM → Clés API → Créer une clé API.
+  Choisir un scope Projet avec les permissions `InstancesFullAccess` + `ProjectReadOnly`.
+- **Org UUID** : Console Scaleway → Organisation → Paramètres → Identifiant de l'organisation.
+
+Ces valeurs sont des UUIDs distincts — le token IAM n'est pas l'org UUID.
 
 ### 1. Installer les CRDs
 
 ```bash
 helm upgrade scaleway-operator-crds \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator-crds \
-    --version 0.1.1 \
+    --version 0.1.6 \
     --namespace scaleway-system \
     --create-namespace \
-    --install
+    --install  # crds
 ```
 
 ### 2. Configurer les informations de connexion de l'opérateur
@@ -48,22 +63,25 @@ helm upgrade scaleway-operator-crds \
 Créez un secret contenant le token Scaleway et l'organisation. Évitez d'écrire le token directement dans la commande (il apparaîtrait dans l'historique shell) :
 
 ```bash
+# MY_SCW_TOKEN  : token IAM Scaleway (depuis IAM → Clés API)
+# MY_SCW_ORG_ID : UUID organisation Scaleway (depuis Organisation → Paramètres)
 kubectl -n scaleway-system create secret generic scaleway-credentials \
-    --from-literal=SCALEWAY_TOKEN=$SCW_OPERATOR_SECRET_KEY \
-    --from-literal=SCALEWAY_ORG_ID=$SCW_DEFAULT_PROJECT_ID
+    --from-literal=SCALEWAY_TOKEN=$MY_SCW_TOKEN \
+    --from-literal=SCALEWAY_ORG_ID=$MY_SCW_ORG_ID \
+    --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Les variables d'environnement `$SCW_OPERATOR_SECRET_KEY` et `$SCW_DEFAULT_PROJECT_ID` doivent être définies dans votre shell avant d'exécuter cette commande.
+Les variables `$MY_SCW_TOKEN` et `$MY_SCW_ORG_ID` doivent être définies dans votre shell (voir Prérequis ci-dessus). La commande est idempotente : réexécutable sans erreur `AlreadyExists`.
 
 ### 3. Déployer l'opérateur
 
 ```bash
 helm upgrade scaleway-operator \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator \
-    --version 0.1.1 \
+    --version 0.1.6 \
     --namespace scaleway-system \
     --install \
-    --set scaleway.existingSecret=scaleway-credentials
+    --set scaleway.existingSecret=scaleway-credentials  # operator
 ```
 
 ### 4. Vérifier l'installation
@@ -75,6 +93,17 @@ kubectl get crd | grep scaleway
 # Vérifier que l'opérateur tourne
 kubectl -n scaleway-system get deployment
 kubectl -n scaleway-system logs -f deployment/scaleway-operator
+```
+
+```bash
+# Vérifier l'état de santé de l'opérateur
+kubectl port-forward -n scaleway-system deployment/scaleway-operator 8080:8080 &
+curl -s http://localhost:8080/readyz
+# → doit retourner 200 OK (attendre ~30s au démarrage)
+# → si 503 persiste après 60s :
+#    (a) Pod vient de démarrer, heartbeat pas encore tické — attendre 30s
+#    (b) Pod en crashloop — vérifier : kubectl logs -n scaleway-system deployment/scaleway-operator
+#    (c) Token invalide — vérifier les logs d'erreur
 ```
 
 ## 📖 Utilisation
@@ -346,7 +375,7 @@ kubectl describe instance my-instance
 
 ### Erreur: "No NamespaceRole found for namespace"
 
-Le namespace n'a pas de ressource `NamespaceRole` associée. Créez-en une dont le `metadata.name` correspond exactement au nom du namespace (voir étape 3b de l'installation).
+Le namespace n'a pas de ressource `NamespaceRole` associée. Créez-en une dont le `metadata.name` correspond exactement au nom du namespace (voir la section Préparer le namespace du projet dans le tutoriel).
 
 ### Erreur: "Namespace must have annotation scaleway.mathieubodin.io/project-id"
 
@@ -359,7 +388,7 @@ kubectl annotate namespace <votre-namespace> \
 
 ### Erreur: "Secret scaleway-ns-creds-X not found"
 
-Créez le Secret IAM pré-provisionné pour ce namespace (voir étape 3c de l'installation).
+Créez le Secret IAM pré-provisionné pour ce namespace (voir le tutoriel Déployer une instance de bout en bout, étape 1).
 
 ### Erreur: "Project access denied"
 
@@ -428,7 +457,6 @@ scaleway-operator/
 │   ├── crd-instance.yaml         # CRD Instance
 │   ├── crd-namespacerole.yaml    # CRD NamespaceRole (cluster-wide)
 │   ├── deployment.yaml           # Deployment de l'opérateur
-│   ├── rbac-helm-deploy.yaml     # RBAC requis pour le déploiement Helm
 │   └── examples.yaml             # Exemples d'utilisation
 ├── Cargo.toml           # Dépendances Rust
 ├── Dockerfile           # Image Docker
