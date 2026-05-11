@@ -11,6 +11,7 @@ Un opérateur Kubernetes moderne écrit en **Rust** pour gérer les ressources S
 - ✅ **Validation de configuration**
 - ✅ **Logging structuré et tracing**
 - ✅ **Multi-zone et multi-région**
+- ✅ **Métriques Prometheus** (`/metrics`, `/healthz`, `/readyz`)
 
 ## 📋 Prérequis
 
@@ -22,100 +23,50 @@ Un opérateur Kubernetes moderne écrit en **Rust** pour gérer les ressources S
 
 ## 🛠️ Installation
 
+Trois étapes :
+
+1. Déploiement des CustomResourceDefinitions.
+2. Fournir les informations de connexion à l'API Scaleway pour l'opérateur.
+3. Déploiement de l'opérateur lui-même.
+
+Ces étapes nécessitent des permissions sur le namespace de l'opérateur, par convention `scaleway-system`.
+Utiliser un compte administrateur du cluster. Voir `k8s/rbac-helm-deploy.yaml` pour les RBAC requis.
+
 ### 1. Installer les CRDs
 
 ```bash
-kubectl apply -f k8s/crd-instance.yaml
-kubectl apply -f k8s/crd-project.yaml
-kubectl apply -f k8s/crd-namespacerole.yaml
+helm upgrade scaleway-operator-crds \
+    oci://ghcr.io/mathieubodin/charts/scaleway-operator-crds \
+    --version 0.1.1 \
+    --namespace scaleway-system \
+    --create-namespace \
+    --install
 ```
 
-### 2. Configurer les credentials de l'opérateur
+### 2. Configurer les informations de connexion de l'opérateur
 
 Créez un secret contenant le token Scaleway et l'organisation. Évitez d'écrire le token directement dans la commande (il apparaîtrait dans l'historique shell) :
 
 ```bash
-# Lire le token depuis stdin sans l'exposer dans l'historique
-kubectl create secret generic scaleway-credentials \
-  --from-file=SCALEWAY_TOKEN=/dev/stdin \
-  --from-literal=SCALEWAY_ORG_ID=<votre-org-id> \
-  -n scaleway-system
-# Saisir le token puis Ctrl+D
+kubectl -n scaleway-system create secret generic scaleway-credentials \
+    --from-literal=SCALEWAY_TOKEN=$SCW_OPERATOR_SECRET_KEY \
+    --from-literal=SCALEWAY_ORG_ID=$SCW_DEFAULT_PROJECT_ID
 ```
 
-Le `deployment.yaml` doit injecter ces valeurs comme variables d'environnement dans le pod :
+Les variables d'environnement `$SCW_OPERATOR_SECRET_KEY` et `$SCW_DEFAULT_PROJECT_ID` doivent être définies dans votre shell avant d'exécuter cette commande.
 
-```yaml
-env:
-  - name: SCALEWAY_TOKEN
-    valueFrom:
-      secretKeyRef:
-        name: scaleway-credentials
-        key: SCALEWAY_TOKEN
-  - name: SCALEWAY_ORG_ID
-    valueFrom:
-      secretKeyRef:
-        name: scaleway-credentials
-        key: SCALEWAY_ORG_ID
-```
-
-### 3. Configurer les prérequis namespace
-
-Chaque namespace hébergeant des `Instance` doit avoir **deux prérequis** :
-
-**a) Annoter le namespace avec le projet Scaleway cible :**
+### 3. Déployer l'opérateur
 
 ```bash
-kubectl annotate namespace production \
-  scaleway.mathieubodin.io/project-id="12345678-1234-1234-1234-123456789012"
+helm upgrade scaleway-operator \
+    oci://ghcr.io/mathieubodin/charts/scaleway-operator \
+    --version 0.1.1 \
+    --namespace scaleway-system \
+    --install \
+    --set scaleway.existingSecret=scaleway-credentials
 ```
 
-**b) Créer la ressource `NamespaceRole` (nom = nom du namespace) :**
-
-```yaml
-apiVersion: scaleway.mathieubodin.io/v1
-kind: NamespaceRole
-metadata:
-  name: production          # Doit correspondre exactement au nom du namespace
-spec:
-  namespace: production
-  scaleway_role: Editor     # Editor / Admin / Viewer / SecurityResponsible / BillingViewer / BillingManager / OrganizationOwner
-```
-
-```bash
-kubectl apply -f namespacerole-production.yaml
-```
-
-**c) Créer le Secret IAM pré-provisionné pour ce namespace :**
-
-Un admin doit créer une IAM Application Scaleway avec `InstancesFullAccess` sur le projet du namespace, puis stocker sa clé secrète :
-
-```bash
-kubectl create secret generic scaleway-ns-creds-production \
-  --from-literal=secret_key=<api-key-secret-du-namespace> \
-  -n scaleway-system
-```
-
-> **Rôles et permissions d'écriture** : seuls `Editor`, `Admin` et `OrganizationOwner` permettent de créer des instances. Les rôles `Viewer`, `SecurityResponsible`, `BillingViewer` et `BillingManager` sont en lecture seule.
-
-### 4. Déployer l'opérateur
-
-```bash
-# Build de l'image Docker
-docker build -t scaleway-operator:latest .
-
-# Pousser vers votre registre (requis pour les clusters multi-nœuds)
-docker tag scaleway-operator:latest your-registry/scaleway-operator:latest
-docker push your-registry/scaleway-operator:latest
-```
-
-Puis déployer dans Kubernetes :
-
-```bash
-kubectl apply -f k8s/deployment.yaml
-```
-
-### 5. Vérifier l'installation
+### 4. Vérifier l'installation
 
 ```bash
 # Vérifier que les CRDs sont installées
@@ -127,6 +78,16 @@ kubectl -n scaleway-system logs -f deployment/scaleway-operator
 ```
 
 ## 📖 Utilisation
+
+Pour utiliser l'opérateur, il faut préparer le namespace qui sera le pendant du projet Scaleway dans le cluster.
+
+### Préparer le projet Scaleway
+
+TODO: Documenter comment, dans Scaleway, créer un projet, le compte application et sa policy.
+
+### Préparer le namespace du projet
+
+TODO: Documenter comment, dans le cluster, créer le namespace, ajouter l'annotation et le Secret.
 
 ### Créer une instance
 
@@ -339,27 +300,36 @@ spec:
 
 ## 📊 Monitoring
 
+L'opérateur expose un serveur HTTP sur le port `8080` avec les endpoints suivants :
+
+| Endpoint | Description |
+|---|---|
+| `/healthz` | Liveness — retourne 200 tant que le process est vivant |
+| `/readyz` | Readiness — retourne 200 si le controller loop est actif, 503 sinon |
+| `/metrics` | Métriques Prometheus (format text `text/plain; version=0.0.4`) |
+| `/log-level` | Niveau de log courant (lecture seule) |
+
+### Accès local aux endpoints
+
+```bash
+kubectl port-forward -n scaleway-system deployment/scaleway-operator 8080:8080
+
+curl http://localhost:8080/healthz   # → ok
+curl http://localhost:8080/readyz    # → 200 ou 503
+curl http://localhost:8080/metrics   # → métriques Prometheus
+```
+
+### Métriques exposées
+
+| Métrique | Type | Description |
+|---|---|---|
+| `scaleway_operator_reconcile_errors_total{error_variant}` | Counter | Erreurs de réconciliation par type |
+| `scaleway_operator_reconcile_duration_seconds{outcome}` | Histogram | Durée des cycles de réconciliation |
+
 ### Logs de l'opérateur
 
 ```bash
 kubectl -n scaleway-system logs -f deployment/scaleway-operator
-```
-
-### Events Kubernetes
-
-```bash
-kubectl describe instance my-web-server
-# Voir les events en bas de la sortie
-```
-
-### Health check
-
-L'opérateur expose un endpoint de santé sur le port `8080` qui retourne `ok` :
-
-```bash
-kubectl port-forward -n scaleway-system deployment/scaleway-operator 8080:8080
-curl http://localhost:8080/
-# → ok
 ```
 
 ## 🐛 Troubleshooting
@@ -428,6 +398,7 @@ Types valides :
 │  │  - Watch Instance CRs            │   │
 │  │  - Lit NamespaceRole + annotation│   │
 │  │  - Reconcile avec Scaleway API   │   │
+│  │  - /healthz /readyz /metrics     │   │
 │  └──────────────────────────────────┘   │
 └─────────────────────────────────────────┘
          │
@@ -447,12 +418,18 @@ scaleway-operator/
 │   ├── resources.rs     # Définition des CRDs (Instance, NamespaceRole)
 │   ├── context.rs       # Contexte partagé + helpers annotations
 │   ├── scaleway.rs      # Client Scaleway API
-│   └── reconcilers.rs   # Logique de réconciliation
+│   ├── reconcilers.rs   # Logique de réconciliation
+│   ├── metrics.rs       # Métriques Prometheus (ReconcileOutcome, OperatorMetrics)
+│   └── server.rs        # Serveur axum (/healthz, /readyz, /metrics, /log-level)
+├── charts/
+│   ├── scaleway-operator-crds/   # Chart Helm pour les CRDs
+│   └── scaleway-operator/        # Chart Helm pour l'opérateur
 ├── k8s/
-│   ├── crd-instance.yaml       # CRD Instance
-│   ├── crd-namespacerole.yaml  # CRD NamespaceRole (cluster-wide)
-│   ├── deployment.yaml         # Deployment de l'opérateur
-│   └── examples.yaml           # Exemples d'utilisation
+│   ├── crd-instance.yaml         # CRD Instance
+│   ├── crd-namespacerole.yaml    # CRD NamespaceRole (cluster-wide)
+│   ├── deployment.yaml           # Deployment de l'opérateur
+│   ├── rbac-helm-deploy.yaml     # RBAC requis pour le déploiement Helm
+│   └── examples.yaml             # Exemples d'utilisation
 ├── Cargo.toml           # Dépendances Rust
 ├── Dockerfile           # Image Docker
 └── README.md            # Ce fichier
@@ -514,10 +491,3 @@ Pour toute question ou problème :
 
 - [Documentation Scaleway API](https://developers.scaleway.com/)
 - [Kube-rs - Rust Kubernetes client](https://kube.rs/)
-
-## Deferred / Open Questions
-
-### From 2026-05-03 review
-
-- **[P3] Prérequis — Pas de recommendation de service account dédié** : L'opérateur peut utiliser un token personnel ou une IAM Application Scaleway.
-    Une IAM Application dédiée est préférable (scope minimal, révocation sans impact sur l'utilisateur). À préciser dans les prérequis.
