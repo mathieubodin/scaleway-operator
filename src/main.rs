@@ -39,7 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         organization_id,
         scaleway_base_url: "https://api.scaleway.com".to_string(),
         metrics,
-        last_reconcile_at: std::sync::atomic::AtomicI64::new(0),
+        last_reconcile_at: std::sync::atomic::AtomicI64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        ),
     });
 
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");
