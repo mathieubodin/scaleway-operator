@@ -18,6 +18,7 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 - Verifier l'etat du deploiement          : `make deploy-status`
 
 **Prérequis pour les targets deploy :**
+
 - Kubeconfig : préférer `KUBECONFIG=~/.kube/config make deploy-crds` (standard).
   `.kube/config` à la racine du repo fonctionne aussi mais ne doit jamais être commité
   (credentials cluster — déjà dans `.gitignore`).
@@ -42,7 +43,9 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
     Contient aussi les helpers pour extraire les annotations de namespace (`scaleway.mathieubodin.io/project-id`, `scaleway.mathieubodin.io/organization-id`) et `get_scaleway_role_for_namespace` qui cherche la ressource `NamespaceRole` par nom de namespace.
 - **`reconcilers.rs`** — `reconcile_instance` : logique de réconciliation en 9 étapes (rôle namespace → project_id → finalizer → validation → create/sync). `error_policy` requeue après 60s en cas d'erreur.
 - **`scaleway.rs`** — `ScalewayClient` wrappant `reqwest`. Appels REST à `https://api.scaleway.com`. Authentification via header `X-Auth-Token`.
-- **`error.rs`** — `OperatorError` enum avec `thiserror`, couvrant les erreurs kube, Scaleway, réseau et configuration.
+- **`error.rs`** — `OperatorError` enum avec `thiserror`, couvrant les erreurs kube, Scaleway, réseau et configuration. Expose `metric_label()` pour produire le label Prometheus PascalCase de chaque variant.
+- **`metrics.rs`** — `ReconcileOutcome` enum et `OperatorMetrics` struct (compteur `scaleway_operator_reconcile_errors_total` + histogramme `scaleway_operator_reconcile_duration_seconds`). `ReconcileMeasurer` RAII dans `reconcilers.rs` consomme ces handles.
+- **`server.rs`** — Serveur axum sur `:8080` exposant `/healthz` (liveness), `/readyz` (readiness — vérifie `last_reconcile_at` dans les 60 dernières secondes), `/metrics` (Prometheus text), `/log-level` (lecture seule).
 
 ### Flux de réconciliation (Instance)
 

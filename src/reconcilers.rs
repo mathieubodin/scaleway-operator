@@ -1,6 +1,7 @@
 use crate::context::Context;
 use crate::context::{extract_project_id_from_namespace, get_scaleway_role_for_namespace};
 use crate::error::{OperatorError, Result};
+use crate::metrics::{OperatorMetrics, ReconcileOutcome};
 use crate::resources::{Instance, InstanceStatus};
 use crate::scaleway::ScalewayClient;
 use chrono::Utc;
@@ -8,11 +9,55 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::api::Patch;
 use kube::runtime::controller::Action;
 use kube::{api::PatchParams, Api, ResourceExt};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
+
+// ── ReconcileMeasurer — RAII timer that records duration + outcome ────────────
+
+struct ReconcileMeasurer<'a> {
+    start: Instant,
+    outcome: Option<ReconcileOutcome>,
+    metrics: &'a OperatorMetrics,
+    last_reconcile_at: &'a AtomicI64,
+}
+
+impl<'a> ReconcileMeasurer<'a> {
+    fn new(metrics: &'a OperatorMetrics, last_reconcile_at: &'a AtomicI64) -> Self {
+        Self {
+            start: Instant::now(),
+            outcome: None,
+            metrics,
+            last_reconcile_at,
+        }
+    }
+
+    fn set_outcome(&mut self, o: ReconcileOutcome) {
+        self.outcome = Some(o);
+    }
+}
+
+impl Drop for ReconcileMeasurer<'_> {
+    fn drop(&mut self) {
+        let outcome = self.outcome.take().unwrap_or_else(|| {
+            tracing::warn!("ReconcileMeasurer dropped without outcome set");
+            ReconcileOutcome::Error
+        });
+        let duration_secs = self.start.elapsed().as_secs_f64();
+        self.metrics.record_duration(&outcome, duration_secs);
+
+        if outcome != ReconcileOutcome::Error {
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            self.last_reconcile_at.store(now_secs, Ordering::Release);
+        }
+    }
+}
 
 /// Retourne true si le rôle autorise les opérations d'écriture sur les instances.
 fn role_allows_write(role: &str) -> bool {
@@ -97,7 +142,9 @@ pub async fn reconcile_instance(
 
     // 1. Suppression en priorité — avant tout lookup de ressources potentiellement absentes
     if instance.metadata.deletion_timestamp.is_some() {
-        return handle_deletion(&instance, &api, &ctx).await;
+        let mut measurer =
+            ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+        return handle_deletion(&instance, &api, &ctx, &mut measurer).await;
     }
 
     // 2. Obtenir le rôle Scaleway depuis la ressource NamespaceRole
@@ -168,8 +215,15 @@ pub async fn reconcile_instance(
         return Ok(Action::requeue(Duration::from_secs(5)));
     }
 
+    // Measurer is created here — after all early returns that don't represent a full
+    // reconcile cycle (deletion_timestamp, missing prerequisites, finalizer add).
+    let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
     // 5. Valider la spec
-    validate_spec(&instance.spec, &ctx.scaleway_client).await?;
+    if let Err(e) = validate_spec(&instance.spec, &ctx.scaleway_client).await {
+        measurer.set_outcome(ReconcileOutcome::Error);
+        return Err(e);
+    }
 
     // 6. Lire les credentials IAM pré-provisionnés pour ce namespace
     let ns_client = match get_namespace_client(&ctx, &namespace).await {
@@ -180,6 +234,7 @@ pub async fn reconcile_instance(
             status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
             return Err(e);
         }
     };
@@ -199,6 +254,7 @@ pub async fn reconcile_instance(
             status.error_message = Some(e.for_status());
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
             return Err(e);
         }
 
@@ -212,7 +268,7 @@ pub async fn reconcile_instance(
 
         // Cherche d'abord une instance existante par nom : récupère une instance
         // orpheline si le status n'a pas pu être écrit lors d'une réconciliation précédente.
-        let instance_id = match ns_client
+        let (instance_id, adopted) = match ns_client
             .find_instance_by_name(&instance.spec.zone, &instance.spec.name, &project_id)
             .await?
         {
@@ -222,17 +278,18 @@ pub async fn reconcile_instance(
                     scaleway_id = %existing_id,
                     "Adopted existing Scaleway instance (status write may have failed previously)"
                 );
-                existing_id
+                (existing_id, true)
             }
             None => {
                 tracing::info!(name = %instance.name_any(), project_id = %project_id, "Creating new Scaleway instance");
                 match ns_client.create_instance(&instance.spec, &project_id).await {
-                    Ok(id) => id,
+                    Ok(id) => (id, false),
                     Err(e) => {
                         tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
                         status.error_message = Some(e.for_status());
                         status.sync_state = "Error".to_string();
                         update_status(&instance, &api, status).await?;
+                        measurer.set_outcome(ReconcileOutcome::Error);
                         return Err(e);
                     }
                 }
@@ -246,6 +303,11 @@ pub async fn reconcile_instance(
         status.error_message = None;
         status.project_id = Some(project_id.clone());
 
+        if adopted {
+            measurer.set_outcome(ReconcileOutcome::Adopted);
+        } else {
+            measurer.set_outcome(ReconcileOutcome::Created);
+        }
         update_status(&instance, &api, status.clone()).await?;
         return Ok(Action::requeue(Duration::from_secs(10)));
     }
@@ -262,6 +324,7 @@ pub async fn reconcile_instance(
                 status.project_id = Some(project_id.clone());
                 status.sync_state = "Synced".to_string();
                 status.error_message = None;
+                measurer.set_outcome(ReconcileOutcome::Synced);
                 update_status(&instance, &api, status).await?;
             }
             Err(OperatorError::InstanceNotFound(_)) => {
@@ -279,6 +342,7 @@ pub async fn reconcile_instance(
                 // Requeue at 30s (not 5s) to allow Scaleway eventual consistency
                 // to propagate before find_instance_by_name runs on the next cycle.
                 // This prevents duplicate creation during short propagation windows.
+                measurer.set_outcome(ReconcileOutcome::Error);
                 return Ok(Action::requeue(Duration::from_secs(30)));
             }
             Err(e) => {
@@ -286,6 +350,7 @@ pub async fn reconcile_instance(
                 status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 update_status(&instance, &api, status).await?;
+                measurer.set_outcome(ReconcileOutcome::Error);
                 return Err(e);
             }
         }
@@ -298,6 +363,7 @@ async fn handle_deletion(
     instance: &Instance,
     api: &Api<Instance>,
     ctx: &Arc<Context>,
+    measurer: &mut ReconcileMeasurer<'_>,
 ) -> std::result::Result<Action, OperatorError> {
     tracing::info!(
         name = %instance.name_any(),
@@ -326,6 +392,7 @@ async fn handle_deletion(
                                 error = %e,
                                 "Failed to delete Scaleway instance"
                             );
+                            measurer.set_outcome(ReconcileOutcome::Error);
                             return Err(e);
                         }
                     }
@@ -364,8 +431,13 @@ async fn handle_deletion(
         &PatchParams::default(),
         &Patch::Merge(patch),
     )
-    .await?;
+    .await
+    .map_err(|e| {
+        measurer.set_outcome(ReconcileOutcome::Error);
+        OperatorError::KubeError(e)
+    })?;
 
+    measurer.set_outcome(ReconcileOutcome::Deleted);
     Ok(Action::await_change())
 }
 
@@ -438,7 +510,8 @@ fn is_permanent_error(error: &OperatorError) -> bool {
     )
 }
 
-pub fn error_policy(_instance: Arc<Instance>, error: &OperatorError, _ctx: Arc<Context>) -> Action {
+pub fn error_policy(_instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
+    ctx.metrics.record_error(error);
     if is_permanent_error(error) {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
@@ -541,5 +614,259 @@ mod tests {
         assert!(!is_permanent_error(&OperatorError::Unknown(
             "mystery".into()
         )));
+    }
+
+    // ── ReconcileMeasurer unit tests ─────────────────────────────────────────
+
+    fn fresh_metrics() -> OperatorMetrics {
+        OperatorMetrics::new(&prometheus::Registry::new()).unwrap()
+    }
+
+    fn histogram_sample_count(metrics: &OperatorMetrics, outcome_label: &str) -> u64 {
+        metrics.reconcile_duration_seconds
+            .with_label_values(&[outcome_label])
+            .get_sample_count()
+    }
+
+    /// Drop without set_outcome defaults to Error and records a duration observation.
+    #[test]
+    fn test_measurer_drop_without_outcome_defaults_to_error() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        {
+            let _measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            // drop without set_outcome
+        }
+        // Duration should have been observed under the "Error" label
+        assert_eq!(histogram_sample_count(&metrics, "Error"), 1,
+            "Error histogram should have 1 observation after drop-without-outcome");
+    }
+
+    /// Drop without set_outcome must NOT update last_reconcile_at.
+    #[test]
+    fn test_measurer_drop_without_outcome_does_not_update_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        {
+            let _measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            // drop without set_outcome → defaults to Error
+        }
+        assert_eq!(
+            last_reconcile_at.load(Ordering::Relaxed),
+            0,
+            "last_reconcile_at must NOT be updated when outcome is Error"
+        );
+    }
+
+    /// set_outcome(Error) must NOT update last_reconcile_at.
+    #[test]
+    fn test_measurer_error_outcome_does_not_update_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Error);
+        }
+        assert_eq!(
+            last_reconcile_at.load(Ordering::Relaxed),
+            0,
+            "last_reconcile_at must NOT be updated when outcome is Error"
+        );
+    }
+
+    /// set_outcome(Synced) MUST update last_reconcile_at to a recent timestamp.
+    #[test]
+    fn test_measurer_synced_outcome_updates_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Synced);
+        }
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let stored = last_reconcile_at.load(Ordering::Relaxed);
+        assert!(
+            stored >= before && stored <= after,
+            "last_reconcile_at should be a recent Unix timestamp, got {} (expected between {} and {})",
+            stored, before, after
+        );
+        // Duration must also be observed under the Synced label
+        assert_eq!(histogram_sample_count(&metrics, "Synced"), 1);
+    }
+
+    /// set_outcome(Created) MUST update last_reconcile_at.
+    #[test]
+    fn test_measurer_created_outcome_updates_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Created);
+        }
+        let stored = last_reconcile_at.load(Ordering::Relaxed);
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            stored >= before && stored <= after,
+            "last_reconcile_at should be a recent Unix timestamp for Created outcome"
+        );
+    }
+
+    /// set_outcome(Adopted) MUST update last_reconcile_at.
+    #[test]
+    fn test_measurer_adopted_outcome_updates_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Adopted);
+        }
+        let stored = last_reconcile_at.load(Ordering::Relaxed);
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            stored >= before && stored <= after,
+            "last_reconcile_at should be a recent Unix timestamp for Adopted outcome"
+        );
+        assert_eq!(histogram_sample_count(&metrics, "Adopted"), 1);
+    }
+
+    /// set_outcome(Deleted) MUST update last_reconcile_at.
+    #[test]
+    fn test_measurer_deleted_outcome_updates_last_reconcile_at() {
+        let metrics = fresh_metrics();
+        let last_reconcile_at = AtomicI64::new(0);
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut measurer = ReconcileMeasurer::new(&metrics, &last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+        }
+        let stored = last_reconcile_at.load(Ordering::Relaxed);
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            stored >= before && stored <= after,
+            "last_reconcile_at should be a recent Unix timestamp for Deleted outcome"
+        );
+    }
+
+    // ── error_policy unit tests ──────────────────────────────────────────────
+
+    fn make_test_context() -> Arc<Context> {
+        // Build a kube::Client from a dummy URL — no actual connection is made.
+        let config = kube::Config::new(
+            "http://localhost:0"
+                .parse()
+                .expect("dummy URL must be valid"),
+        );
+        let client = kube::Client::try_from(config).expect("Client from dummy config must succeed");
+        Arc::new(Context {
+            client,
+            scaleway_client: crate::scaleway::ScalewayClient::new_with_base_url(
+                "test-token".to_string(),
+                "http://localhost:0".to_string(),
+            ),
+            organization_id: "test-org".to_string(),
+            scaleway_base_url: "http://localhost:0".to_string(),
+            metrics: fresh_metrics(),
+            last_reconcile_at: AtomicI64::new(0),
+        })
+    }
+
+    fn dummy_instance() -> Arc<Instance> {
+        use crate::resources::{Instance, InstanceSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        Arc::new(Instance {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: InstanceSpec {
+                name: "test".to_string(),
+                zone: "fr-par-1".to_string(),
+                image: "ubuntu-jammy".to_string(),
+                instance_type: "DEV1-S".to_string(),
+                tags: vec![],
+                boot_volume_size: 20,
+                network: None,
+                security: None,
+            },
+            status: None,
+        })
+    }
+
+    /// error_policy with ConfigError increments the ConfigError counter.
+    #[tokio::test]
+    async fn test_error_policy_increments_config_error_counter() {
+        let ctx = make_test_context();
+        let err = OperatorError::ConfigError("bad annotation".to_string());
+        error_policy(dummy_instance(), &err, ctx.clone());
+        let value = ctx
+            .metrics
+            .reconcile_errors_total
+            .with_label_values(&["ConfigError"])
+            .get();
+        assert_eq!(value, 1, "ConfigError counter should be 1");
+        // Other labels must remain 0
+        let other = ctx
+            .metrics
+            .reconcile_errors_total
+            .with_label_values(&["NetworkError"])
+            .get();
+        assert_eq!(other, 0, "NetworkError counter must remain 0");
+    }
+
+    /// error_policy with a different error variant increments the correct label only.
+    #[tokio::test]
+    async fn test_error_policy_increments_unknown_error_counter() {
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("mystery".to_string());
+        error_policy(dummy_instance(), &err, ctx.clone());
+        let value = ctx
+            .metrics
+            .reconcile_errors_total
+            .with_label_values(&["Unknown"])
+            .get();
+        assert_eq!(value, 1, "Unknown counter should be 1");
+    }
+
+    /// Calling error_policy twice with the same variant increments to 2.
+    #[tokio::test]
+    async fn test_error_policy_counter_accumulates() {
+        let ctx = make_test_context();
+        let err = OperatorError::ConfigError("x".to_string());
+        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy(dummy_instance(), &err, ctx.clone());
+        let value = ctx
+            .metrics
+            .reconcile_errors_total
+            .with_label_values(&["ConfigError"])
+            .get();
+        assert_eq!(value, 2);
     }
 }

@@ -39,6 +39,25 @@ pub enum OperatorError {
 
 pub type Result<T> = std::result::Result<T, OperatorError>;
 
+impl OperatorError {
+    /// Returns the PascalCase variant name for use as a Prometheus label.
+    pub fn metric_label(&self) -> &'static str {
+        match self {
+            OperatorError::KubeError(_) => "KubeError",
+            OperatorError::ScalewayError { .. } => "ScalewayError",
+            OperatorError::ProjectAccessDenied(_) => "ProjectAccessDenied",
+            OperatorError::InstanceNotFound(_) => "InstanceNotFound",
+            OperatorError::InvalidZone(_) => "InvalidZone",
+            OperatorError::InvalidInstanceType(_) => "InvalidInstanceType",
+            OperatorError::ConfigError(_) => "ConfigError",
+            OperatorError::NetworkError(_) => "NetworkError",
+            OperatorError::SerializationError(_) => "SerializationError",
+            OperatorError::FinalizationError(_) => "FinalizationError",
+            OperatorError::Unknown(_) => "Unknown",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
