@@ -9,6 +9,8 @@ use scaleway_operator::{
     server::run_axum_server,
 };
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,6 +52,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");
 
     tokio::spawn(run_axum_server(Arc::clone(&context), Arc::clone(&registry)));
+
+    // Heartbeat : rafraîchit last_reconcile_at toutes les 30s pour maintenir /readyz
+    // même quand il n'y a aucune Instance à réconcilier.
+    tokio::spawn({
+        let ctx = Arc::clone(&context);
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                ctx.last_reconcile_at.store(now, Ordering::Release);
+            }
+        }
+    });
 
     let api = Api::<Instance>::all(client);
     Controller::new(api, Default::default())
