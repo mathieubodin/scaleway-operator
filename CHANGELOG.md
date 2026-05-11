@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.2...scaleway-operator-v0.1.3) (2026-05-11)
+
+
+### Bug Fixes
+
+* **ci:** add attestations: write permission to build-and-push job ([f75ee2b](https://github.com/mathieubodin/scaleway-operator/commit/f75ee2bfca2336a887f617df0d58d09aa6a69d9f))
+* **ci:** correct Docker image tagging and attestation in release pipeline ([4667c72](https://github.com/mathieubodin/scaleway-operator/commit/4667c7226f1e940e18039b319d615008bc872847))
+* **ci:** use version output instead of tag_name for Docker image tags ([73ea488](https://github.com/mathieubodin/scaleway-operator/commit/73ea488105a395ad22713962f8e1c6376937ab63))
+
 ## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.1...scaleway-operator-v0.1.2) (2026-05-11)
 
 
