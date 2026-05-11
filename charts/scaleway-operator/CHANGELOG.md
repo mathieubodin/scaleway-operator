@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
+
+
+### Bug Fixes
+
+* **server:** trigger rebuild for heartbeat fix ([72c6f70](https://github.com/mathieubodin/scaleway-operator/commit/72c6f70e941fa0393fc1b4f534a3640f93c67cda))
+
 ## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.4...scaleway-operator-v0.1.5) (2026-05-11)
 
 
