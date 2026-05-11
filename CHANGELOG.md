@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.1...scaleway-operator-v0.1.2) (2026-05-11)
+
+
+### Features
+
+* **make:** add check-kubeconfig guard and run-integration-test-locally ([9538540](https://github.com/mathieubodin/scaleway-operator/commit/95385407b4392a301d43cf261cdc89338de703f0))
+* **metrics:** add metrics module with ReconcileOutcome and OperatorMetrics ([ece2411](https://github.com/mathieubodin/scaleway-operator/commit/ece241116dd908234ccb740b8cd3c6c222ea49b3))
+* **metrics:** extend Context with OperatorMetrics and last_reconcile_at ([649d39e](https://github.com/mathieubodin/scaleway-operator/commit/649d39e856e420e9aa66388321b3cb616a77c0b3))
+* **metrics:** instrument reconcilers with error counter and ReconcileMeasurer RAII ([4d143fe](https://github.com/mathieubodin/scaleway-operator/commit/4d143feca16b1d0ae7811bf80ad3c637cc36abb6))
+* **metrics:** prometheus observability and axum health server ([ab714db](https://github.com/mathieubodin/scaleway-operator/commit/ab714db615b0883c4d138772a1b899341f2525d6))
+* **metrics:** replace health server with axum — /healthz, /readyz, /metrics, /log-level ([3461b2b](https://github.com/mathieubodin/scaleway-operator/commit/3461b2b1d812eca4938b10ceee8a68f263d3d33d))
+
+
+### Bug Fixes
+
+* **ci:** pin cosign binary to v2.5.2 for cosign-installer v4 upgrade ([0d051cf](https://github.com/mathieubodin/scaleway-operator/commit/0d051cf4ff4de3c0241ed857c8e809def2307607))
+* **make:** add --namespace scaleway-system to deploy-crds ([13bbaad](https://github.com/mathieubodin/scaleway-operator/commit/13bbaadc04607127228f502f0ec560b3cea67290))
+* **make:** deploy-crds via helm template | kubectl apply ([da1956b](https://github.com/mathieubodin/scaleway-operator/commit/da1956b19c96be486827e1ed1ca1d4671f8bd547))
+* **metrics:** add as_str() to ReconcileOutcome, update CLAUDE.md modules ([e25ad7d](https://github.com/mathieubodin/scaleway-operator/commit/e25ad7dc1dfd2aef702067a241df1397e93a3085))
+* **metrics:** address 4 code review findings ([3409c9e](https://github.com/mathieubodin/scaleway-operator/commit/3409c9ed7c21202e4ea09694000e78291d641c9e))
+* **release:** correct changelog-path in release-please-config for helm packages ([b34195e](https://github.com/mathieubodin/scaleway-operator/commit/b34195e0103f5a383a8442c8f1536d58ae47a483))
+
+
+### Refactoring
+
+* **metrics:** simplify and fix code quality issues ([fe6beff](https://github.com/mathieubodin/scaleway-operator/commit/fe6beff2c487d6fbf1e249c789122c76321b54ad))
+
+
+### Documentation
+
+* **deploy:** document required RBAC for helm deploy and add manifest ([67bf6c2](https://github.com/mathieubodin/scaleway-operator/commit/67bf6c2c741b159e2ebba2958c78dae981747524))
+
 ## [0.1.1](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.0...scaleway-operator-v0.1.1) (2026-05-09)
 
 
