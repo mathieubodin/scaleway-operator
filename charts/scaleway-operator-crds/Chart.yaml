@@ -3,7 +3,7 @@ name: scaleway-operator-crds
 description: Custom Resource Definitions for the Scaleway Kubernetes Operator
 type: application
 version: 0.1.6
-appVersion: "0.1.0"
+appVersion: "0.1.6"
 keywords:
   - scaleway
   - operator
