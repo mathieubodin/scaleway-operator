@@ -26,9 +26,11 @@ L'endpoint `/readyz` vérifie que `last_reconcile_at` a été mis à jour dans l
 
 - `kubectl get pods` affiche `0/1 Running` pour le pod opérateur, sans crashloop.
 - `kubectl describe pod <pod>` montre :
+
   ```
   Readiness probe failed: Get "http://x.x.x.x:8080/readyz": HTTP probe failed with statuscode: 503
   ```
+
 - `kubectl logs <pod>` ne montre aucune erreur : le serveur axum démarre correctement.
 - Le problème disparaît dès qu'un premier CR `Instance` est créé dans le cluster.
 

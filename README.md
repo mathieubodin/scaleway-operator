@@ -35,12 +35,14 @@ Ces étapes nécessitent des droits cluster-admin (ou équivalent) sur le cluste
 ### Prérequis
 
 **Techniques :**
+
 - Kubernetes 1.35+ avec droits cluster-admin
 - Helm 3.8+ (support des registres OCI requis)
 
 **Credentials Scaleway :**
 
 Vous aurez besoin de deux valeurs :
+
 - **Token IAM** : Console Scaleway → IAM → Clés API → Créer une clé API.
   Choisir un scope Projet avec les permissions `InstancesFullAccess` + `ProjectReadOnly`.
 - **Org UUID** : Console Scaleway → Organisation → Paramètres → Identifiant de l'organisation.
@@ -332,7 +334,7 @@ spec:
 L'opérateur expose un serveur HTTP sur le port `8080` avec les endpoints suivants :
 
 | Endpoint | Description |
-|---|---|
+| --- | --- |
 | `/healthz` | Liveness — retourne 200 tant que le process est vivant |
 | `/readyz` | Readiness — retourne 200 si le controller loop est actif, 503 sinon |
 | `/metrics` | Métriques Prometheus (format text `text/plain; version=0.0.4`) |
@@ -351,7 +353,7 @@ curl http://localhost:8080/metrics   # → métriques Prometheus
 ### Métriques exposées
 
 | Métrique | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `scaleway_operator_reconcile_errors_total{error_variant}` | Counter | Erreurs de réconciliation par type |
 | `scaleway_operator_reconcile_duration_seconds{outcome}` | Histogram | Durée des cycles de réconciliation |
 

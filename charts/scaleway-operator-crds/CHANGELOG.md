@@ -2,13 +2,11 @@
 
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.5...scaleway-operator-crds-v0.1.6) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **server:** trigger rebuild for heartbeat fix ([72c6f70](https://github.com/mathieubodin/scaleway-operator/commit/72c6f70e941fa0393fc1b4f534a3640f93c67cda))
 
 ## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.4...scaleway-operator-crds-v0.1.5) (2026-05-11)
-
 
 ### Bug Fixes
 
@@ -16,20 +14,17 @@
 
 ## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.3...scaleway-operator-crds-v0.1.4) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **docker:** trigger rebuild with numeric UID fix ([3f1fc1c](https://github.com/mathieubodin/scaleway-operator/commit/3f1fc1c9682c5416541133a9894b549f802f4026))
 
 ## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.2...scaleway-operator-crds-v0.1.3) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **ci:** correct Docker image tagging and attestation in release pipeline ([4667c72](https://github.com/mathieubodin/scaleway-operator/commit/4667c7226f1e940e18039b319d615008bc872847))
 
 ## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.1...scaleway-operator-crds-v0.1.2) (2026-05-11)
-
 
 ### Bug Fixes
 

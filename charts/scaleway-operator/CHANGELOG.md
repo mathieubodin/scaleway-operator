@@ -2,13 +2,11 @@
 
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **server:** trigger rebuild for heartbeat fix ([72c6f70](https://github.com/mathieubodin/scaleway-operator/commit/72c6f70e941fa0393fc1b4f534a3640f93c67cda))
 
 ## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.4...scaleway-operator-v0.1.5) (2026-05-11)
-
 
 ### Bug Fixes
 
@@ -16,13 +14,11 @@
 
 ## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.3...scaleway-operator-v0.1.4) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **docker:** trigger rebuild with numeric UID fix ([3f1fc1c](https://github.com/mathieubodin/scaleway-operator/commit/3f1fc1c9682c5416541133a9894b549f802f4026))
 
 ## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.2...scaleway-operator-v0.1.3) (2026-05-11)
-
 
 ### Bug Fixes
 
@@ -30,12 +26,10 @@
 
 ## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.1...scaleway-operator-v0.1.2) (2026-05-11)
 
-
 ### Features
 
 * **metrics:** prometheus observability and axum health server ([ab714db](https://github.com/mathieubodin/scaleway-operator/commit/ab714db615b0883c4d138772a1b899341f2525d6))
 * **metrics:** replace health server with axum — /healthz, /readyz, /metrics, /log-level ([3461b2b](https://github.com/mathieubodin/scaleway-operator/commit/3461b2b1d812eca4938b10ceee8a68f263d3d33d))
-
 
 ### Bug Fixes
 

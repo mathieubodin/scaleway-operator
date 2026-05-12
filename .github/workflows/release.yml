@@ -162,3 +162,47 @@ jobs:
               oci://ghcr.io/${{ github.repository_owner }}/charts && break
             [ "$attempt" -lt 3 ] && echo "Push attempt $attempt failed, retrying…" && sleep 10
           done
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 3: Sync README helm versions
+  # Met à jour --version X.Y.Z dans README.md après chaque release de chart.
+  # Push via GITHUB_TOKEN : GitHub ne re-déclenche pas de workflow run pour les
+  # push effectués avec ce token (suppression plateforme, pas de boucle CI).
+  # Précondition : github-actions[bot] doit pouvoir pousser sur main directement.
+  # ────────────────────────────────────────────────────────────────────────────
+  sync-readme-versions:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read and validate chart versions
+        id: chart-version
+        run: |
+          CRD_VER=$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}')
+          OP_VER=$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}')
+          [[ "$CRD_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid crds version: $CRD_VER" >&2; exit 1; }
+          [[ "$OP_VER"  =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid operator version: $OP_VER"  >&2; exit 1; }
+          echo "crds=$CRD_VER"     >> "$GITHUB_OUTPUT"
+          echo "operator=$OP_VER"  >> "$GITHUB_OUTPUT"
+
+      - name: Update README helm versions
+        run: |
+          sed -i '/ghcr\.io\/mathieubodin\/charts\/scaleway-operator-crds/{n;s/--version [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/--version ${{ steps.chart-version.outputs.crds }}/}' README.md
+          sed -i '/ghcr\.io\/mathieubodin\/charts\/scaleway-operator[^-]/{n;s/--version [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/--version ${{ steps.chart-version.outputs.operator }}/}' README.md
+
+      - name: Commit if changed
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+          git diff --quiet README.md || (
+            git add README.md &&
+            git commit -m "chore: sync README helm versions (crds=${{ steps.chart-version.outputs.crds }}, operator=${{ steps.chart-version.outputs.operator }})" &&
+            git push
+          )

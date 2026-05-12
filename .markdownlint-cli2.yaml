@@ -7,6 +7,8 @@ globs:
 config:
   MD001:
     front_matter_title: ""
+  MD024:
+    siblings_only: true
   MD013:
     line_length: 280
     heading_line_length: 180

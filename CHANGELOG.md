@@ -2,14 +2,12 @@
 
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **server:** add heartbeat ticker to keep /readyz alive with no instances ([5c3337c](https://github.com/mathieubodin/scaleway-operator/commit/5c3337c9970dba55db9469bc969a693dff34e74c))
 * **server:** trigger rebuild for heartbeat fix ([72c6f70](https://github.com/mathieubodin/scaleway-operator/commit/72c6f70e941fa0393fc1b4f534a3640f93c67cda))
 
 ## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.4...scaleway-operator-v0.1.5) (2026-05-11)
-
 
 ### Bug Fixes
 
@@ -18,14 +16,12 @@
 
 ## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.3...scaleway-operator-v0.1.4) (2026-05-11)
 
-
 ### Bug Fixes
 
 * **docker:** trigger rebuild with numeric UID fix ([3f1fc1c](https://github.com/mathieubodin/scaleway-operator/commit/3f1fc1c9682c5416541133a9894b549f802f4026))
 * **docker:** use numeric UID 65532 for operator user ([5a5b894](https://github.com/mathieubodin/scaleway-operator/commit/5a5b89413e58f6119c36840c3713310578531405))
 
 ## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.2...scaleway-operator-v0.1.3) (2026-05-11)
-
 
 ### Bug Fixes
 
@@ -34,7 +30,6 @@
 * **ci:** use version output instead of tag_name for Docker image tags ([73ea488](https://github.com/mathieubodin/scaleway-operator/commit/73ea488105a395ad22713962f8e1c6376937ab63))
 
 ## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.1...scaleway-operator-v0.1.2) (2026-05-11)
-
 
 ### Features
 
@@ -45,7 +40,6 @@
 * **metrics:** prometheus observability and axum health server ([ab714db](https://github.com/mathieubodin/scaleway-operator/commit/ab714db615b0883c4d138772a1b899341f2525d6))
 * **metrics:** replace health server with axum — /healthz, /readyz, /metrics, /log-level ([3461b2b](https://github.com/mathieubodin/scaleway-operator/commit/3461b2b1d812eca4938b10ceee8a68f263d3d33d))
 
-
 ### Bug Fixes
 
 * **ci:** pin cosign binary to v2.5.2 for cosign-installer v4 upgrade ([0d051cf](https://github.com/mathieubodin/scaleway-operator/commit/0d051cf4ff4de3c0241ed857c8e809def2307607))
@@ -55,18 +49,15 @@
 * **metrics:** address 4 code review findings ([3409c9e](https://github.com/mathieubodin/scaleway-operator/commit/3409c9ed7c21202e4ea09694000e78291d641c9e))
 * **release:** correct changelog-path in release-please-config for helm packages ([b34195e](https://github.com/mathieubodin/scaleway-operator/commit/b34195e0103f5a383a8442c8f1536d58ae47a483))
 
-
 ### Refactoring
 
 * **metrics:** simplify and fix code quality issues ([fe6beff](https://github.com/mathieubodin/scaleway-operator/commit/fe6beff2c487d6fbf1e249c789122c76321b54ad))
-
 
 ### Documentation
 
 * **deploy:** document required RBAC for helm deploy and add manifest ([67bf6c2](https://github.com/mathieubodin/scaleway-operator/commit/67bf6c2c741b159e2ebba2958c78dae981747524))
 
 ## [0.1.1](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.0...scaleway-operator-v0.1.1) (2026-05-09)
-
 
 ### Features
 
@@ -82,7 +73,6 @@
 * release pipeline, Helm charts, domain fix, and CI hardening ([4403d6f](https://github.com/mathieubodin/scaleway-operator/commit/4403d6f3f746543758176b42fa49eab2be3405c5))
 * **tests:** add integration test infrastructure with TestFixture, k8s helpers, and all test scenarios ([a7528af](https://github.com/mathieubodin/scaleway-operator/commit/a7528aff2954665c75dd7159833b561f729d586a))
 
-
 ### Bug Fixes
 
 * **ci:** per-job permissions, pin actions to SHA, fix helm login and packaging ([d3e740d](https://github.com/mathieubodin/scaleway-operator/commit/d3e740d67b3f3f2ffb33043e6e004644c0887dc3))
@@ -97,11 +87,9 @@
 * **tests:** support KUBE_API_URL env var for kubectl proxy (default: localhost:8001) ([763328a](https://github.com/mathieubodin/scaleway-operator/commit/763328a895ae55dda9026817a3a19807f12cfe90))
 * **tests:** use pre-created fixtures via YAML, no k8s resource creation from test code ([7d61dfa](https://github.com/mathieubodin/scaleway-operator/commit/7d61dfac27a7811e5e946192f527196e03c91dcb))
 
-
 ### Refactoring
 
 * **lib:** export modules from lib.rs for integration test access ([efb83ac](https://github.com/mathieubodin/scaleway-operator/commit/efb83ac052b130e0bf604d79764db0b744b2ed6e))
-
 
 ### Documentation
 

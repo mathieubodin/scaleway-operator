@@ -25,9 +25,11 @@ Dans `release-please-config.json`, `changelog-path` est résolu relativement au 
 ## Symptoms
 
 - `helm package charts/scaleway-operator-crds/` échoue avec :
+
   ```
   Error: Chart.yaml file is missing in charts/scaleway-operator-crds/charts/scaleway-operator-crds
   ```
+
 - Un répertoire `charts/scaleway-operator-crds/charts/` est créé après un merge de PR release-please.
 - `helm lint` passe (il ne valide pas les fichiers non-déclarés dans `charts/`), mais `helm package` échoue.
 
@@ -40,6 +42,7 @@ Ajouter le chemin dans `.helmignore` — Helm se plaint avant même le packaging
 Dans `release-please-config.json`, utiliser un chemin relatif simple :
 
 **Avant :**
+
 ```json
 "charts/scaleway-operator-crds": {
   "release-type": "helm",
@@ -48,6 +51,7 @@ Dans `release-please-config.json`, utiliser un chemin relatif simple :
 ```
 
 **Après :**
+
 ```json
 "charts/scaleway-operator-crds": {
   "release-type": "helm",
