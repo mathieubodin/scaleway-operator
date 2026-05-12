@@ -21,6 +21,7 @@
     "charts/scaleway-operator": {
       "changelog-path": "CHANGELOG.md",
       "release-type": "helm",
+      "extra-files": ["README.md"],
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "draft": false,

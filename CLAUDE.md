@@ -38,13 +38,6 @@ doit avoir les droits suivants :
 | Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
 | Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
 
-Un manifest prêt à l'emploi est disponible dans `k8s/rbac-helm-deploy.yaml`.
-Remplacer `<USER>` par le nom d'utilisateur Kubernetes du déployeur, puis :
-
-```bash
-kubectl apply -f k8s/rbac-helm-deploy.yaml
-```
-
 Sur Scaleway Kapsule, le nom d'utilisateur est de la forme
 `scaleway:bearer:<uuid-du-token-iam>`.
 

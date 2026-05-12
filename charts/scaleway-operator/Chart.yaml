@@ -4,7 +4,7 @@ description: Kubernetes operator reconciling Scaleway cloud resources
   (instances, projects, load balancers)
 type: application
 version: 0.1.6
-appVersion: "0.1.0"
+appVersion: "0.1.6"
 keywords:
   - scaleway
   - operator
