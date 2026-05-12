@@ -142,8 +142,7 @@ pub async fn reconcile_instance(
 
     // 1. Suppression en priorité — avant tout lookup de ressources potentiellement absentes
     if instance.metadata.deletion_timestamp.is_some() {
-        let mut measurer =
-            ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+        let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
         return handle_deletion(&instance, &api, &ctx, &mut measurer).await;
     }
 
@@ -623,7 +622,8 @@ mod tests {
     }
 
     fn histogram_sample_count(metrics: &OperatorMetrics, outcome_label: &str) -> u64 {
-        metrics.reconcile_duration_seconds
+        metrics
+            .reconcile_duration_seconds
             .with_label_values(&[outcome_label])
             .get_sample_count()
     }
@@ -638,8 +638,11 @@ mod tests {
             // drop without set_outcome
         }
         // Duration should have been observed under the "Error" label
-        assert_eq!(histogram_sample_count(&metrics, "Error"), 1,
-            "Error histogram should have 1 observation after drop-without-outcome");
+        assert_eq!(
+            histogram_sample_count(&metrics, "Error"),
+            1,
+            "Error histogram should have 1 observation after drop-without-outcome"
+        );
     }
 
     /// Drop without set_outcome must NOT update last_reconcile_at.

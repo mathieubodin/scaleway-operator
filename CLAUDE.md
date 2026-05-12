@@ -34,7 +34,7 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 doit avoir les droits suivants :
 
 | Scope | Ressource | Verbes |
-|---|---|---|
+| --- | --- | --- |
 | Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
 | Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
 

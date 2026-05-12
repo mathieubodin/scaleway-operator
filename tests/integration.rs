@@ -108,10 +108,8 @@ impl TestFixture {
             ),
             organization_id: "test-org".to_string(),
             scaleway_base_url: mock_url.to_string(),
-            metrics: scaleway_operator::metrics::OperatorMetrics::new(
-                &prometheus::Registry::new(),
-            )
-            .unwrap(),
+            metrics: scaleway_operator::metrics::OperatorMetrics::new(&prometheus::Registry::new())
+                .unwrap(),
             last_reconcile_at: std::sync::atomic::AtomicI64::new(0),
         })
     }

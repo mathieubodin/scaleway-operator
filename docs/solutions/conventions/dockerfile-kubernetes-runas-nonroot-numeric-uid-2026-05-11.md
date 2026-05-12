@@ -24,12 +24,14 @@ Kubernetes ne peut pas vérifier qu'un utilisateur nommé est non-root au démar
 Remplacer l'utilisateur nommé par un UID numérique dans le Dockerfile :
 
 **Avant :**
+
 ```dockerfile
 RUN addgroup -S operator && adduser -S operator -G operator
 USER operator
 ```
 
 **Après :**
+
 ```dockerfile
 RUN addgroup -S -g 65532 operator && adduser -S -u 65532 -G operator operator
 USER 65532:65532
@@ -42,6 +44,7 @@ La convention `65532:65532` (UID:GID) est celle de l'écosystème distroless (Go
 Kubernetes évalue `runAsNonRoot` en lisant le champ `User` des métadonnées OCI de l'image **avant** le démarrage du container. Si ce champ contient une chaîne non numérique, Kubernetes ne peut pas résoudre l'UID sans exécuter le container. Un UID numérique est auto-descriptif : Kubernetes vérifie directement que la valeur est différente de 0.
 
 Symptôme quand non appliqué :
+
 ```
 container has runAsNonRoot and image has non-numeric user (operator),
 cannot verify user is non-root
@@ -55,6 +58,7 @@ cannot verify user is non-root
 ## Examples
 
 Vérifier l'UID embarqué dans une image :
+
 ```bash
 docker inspect <image> --format '{{ .Config.User }}'
 # Doit retourner un entier (65532), pas un nom (operator)

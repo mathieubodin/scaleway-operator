@@ -34,35 +34,35 @@ During the PR review, the pattern was split to match the established convention:
 
 ```makefile
 check-mytool:
-	@command -v mytool >/dev/null 2>&1 || { \
-		echo ""; \
-		echo "Error: mytool not found. Install with:"; \
-		echo "  brew install mytool"; \
-		echo ""; \
-		exit 1; \
-	}
+ @command -v mytool >/dev/null 2>&1 || { \
+  echo ""; \
+  echo "Error: mytool not found. Install with:"; \
+  echo "  brew install mytool"; \
+  echo ""; \
+  exit 1; \
+ }
 ```
 
 **Calling target — inline the commands, declare the guard as prerequisite:**
 
 ```makefile
 check: check-cargo check-helm check-markdownlint ## Lint et format
-	cargo fmt
-	cargo clippy -- -D warnings
-	markdownlint-cli2
-	helm lint charts/scaleway-operator-crds/
-	helm lint charts/scaleway-operator/ \
-		--set scaleway.token=placeholder \
-		--set scaleway.organizationId=00000000-0000-0000-0000-000000000000
+ cargo fmt
+ cargo clippy -- -D warnings
+ markdownlint-cli2
+ helm lint charts/scaleway-operator-crds/
+ helm lint charts/scaleway-operator/ \
+  --set scaleway.token=placeholder \
+  --set scaleway.organizationId=00000000-0000-0000-0000-000000000000
 ```
 
 **env-check lists all guards as prerequisites:**
 
 ```makefile
 env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
-	@echo ""
-	@echo "Environment pass the check list"
-	@echo ""
+ @echo ""
+ @echo "Environment pass the check list"
+ @echo ""
 ```
 
 **Guards are NOT in `.PHONY`** — consistent with `check-cargo`, `check-kubectl`, `check-docker` which are also absent from `.PHONY`.
@@ -86,25 +86,25 @@ env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docke
 
 ```makefile
 check-helm: ## Linter les deux Helm charts
-	@command -v helm >/dev/null 2>&1 || { echo "Error: helm not found"; exit 1; }
-	helm lint charts/scaleway-operator-crds/
-	helm lint charts/scaleway-operator/ --set scaleway.token=placeholder
+ @command -v helm >/dev/null 2>&1 || { echo "Error: helm not found"; exit 1; }
+ helm lint charts/scaleway-operator-crds/
+ helm lint charts/scaleway-operator/ --set scaleway.token=placeholder
 
 check: check-cargo ## Lint et format
-	cargo fmt
-	$(MAKE) check-helm   # recursive make call, runs both guard and lint
+ cargo fmt
+ $(MAKE) check-helm   # recursive make call, runs both guard and lint
 ```
 
 **After — guard only, commands inlined (correct):**
 
 ```makefile
 check-helm:   # guard only
-	@command -v helm >/dev/null 2>&1 || { echo "Error: helm not found"; exit 1; }
+ @command -v helm >/dev/null 2>&1 || { echo "Error: helm not found"; exit 1; }
 
 check: check-cargo check-helm ## Lint et format
-	cargo fmt
-	helm lint charts/scaleway-operator-crds/   # commands inlined here
-	helm lint charts/scaleway-operator/ --set scaleway.token=placeholder
+ cargo fmt
+ helm lint charts/scaleway-operator-crds/   # commands inlined here
+ helm lint charts/scaleway-operator/ --set scaleway.token=placeholder
 ```
 
 ## Related

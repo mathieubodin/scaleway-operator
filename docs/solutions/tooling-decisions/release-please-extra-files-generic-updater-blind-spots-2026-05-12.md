@@ -120,7 +120,7 @@ gh pr view <PR_NUMBER> --json files | jq '[.files[].path]'
 ```
 
 | Critère | Attendu si correct | Attendu si raté |
-|---|---|---|
+| --- | --- | --- |
 | `README.md` dans les fichiers | Présent | Absent (path résolu comme package-relatif) |
 | Diff `--version` lignes | `0.1.6` → `0.1.7` sur les 2 lignes | 0 lignes changées (pattern non trouvé) |
 | `.release-please-manifest.json` | Les deux charts à `0.1.7` | Un seul chart à `0.1.7` (divergence) |

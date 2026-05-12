@@ -38,6 +38,7 @@ Stripper le préfixe avec une expression shell dans le champ `value:` de `docker
 Utiliser `outputs.version` à la place de `outputs.tag_name`. Dans un repo multi-package, `version` contient le semver nu (`0.1.2`) sans le préfixe de composant.
 
 **Avant :**
+
 ```yaml
 tags: |
   type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
@@ -45,6 +46,7 @@ tags: |
 ```
 
 **Après :**
+
 ```yaml
 tags: |
   type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
