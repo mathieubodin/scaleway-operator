@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.6...scaleway-operator-v0.1.7) (2026-05-12)
+
+
+### Bug Fixes
+
+* **charts:** align appVersion with deployed binary version 0.1.6 ([a7b7ccf](https://github.com/mathieubodin/scaleway-operator/commit/a7b7ccfdf1b4a190deb6ad203f868ac9a2d2e4c1))
+* **release:** replace broken extra-files with post-release README version sync ([0e4ff63](https://github.com/mathieubodin/scaleway-operator/commit/0e4ff63ce9dcb8b66e5b110e6d0f6198bc0e9b4e))
+
+
+### Documentation
+
+* **readme:** improve installation section + fix charts appVersion ([12d21c4](https://github.com/mathieubodin/scaleway-operator/commit/12d21c43b700ca6b14676fd87398a8321093faf9))
+
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
 
 ### Bug Fixes

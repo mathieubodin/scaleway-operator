@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.6...scaleway-operator-v0.1.7) (2026-05-12)
+
+
+### Bug Fixes
+
+* **charts:** align appVersion with deployed binary version 0.1.6 ([a7b7ccf](https://github.com/mathieubodin/scaleway-operator/commit/a7b7ccfdf1b4a190deb6ad203f868ac9a2d2e4c1))
+* **release:** replace broken extra-files with post-release README sync job ([5c00738](https://github.com/mathieubodin/scaleway-operator/commit/5c0073825b947b523d1ca80a862036fcfe2c053b))
+* **release:** replace broken extra-files with post-release README version sync ([0e4ff63](https://github.com/mathieubodin/scaleway-operator/commit/0e4ff63ce9dcb8b66e5b110e6d0f6198bc0e9b4e))
+* **release:** use package-relative path for extra-files README ([b17dcc6](https://github.com/mathieubodin/scaleway-operator/commit/b17dcc6b7cfcbb45655afd72679ce2fd361c42d3))
+
+
+### Documentation
+
+* **readme:** improve installation section + fix charts appVersion ([12d21c4](https://github.com/mathieubodin/scaleway-operator/commit/12d21c43b700ca6b14676fd87398a8321093faf9))
+* **readme:** improve installation section for new users ([67009b2](https://github.com/mathieubodin/scaleway-operator/commit/67009b2e4a20463e670f6fe8a79270af0965a053))
+* **readme:** update installation with validated helm OCI commands ([05bc37a](https://github.com/mathieubodin/scaleway-operator/commit/05bc37a37290457fc26b1a50054b1e27e30f0476))
+* **solutions:** add two bash and documentation editing conventions ([cd6387b](https://github.com/mathieubodin/scaleway-operator/commit/cd6387b6f8ea1b583b30009de5dbff896f5af09e))
+* **solutions:** document release-please extra-files generic updater constraints ([a3833d5](https://github.com/mathieubodin/scaleway-operator/commit/a3833d58779ed3e307e1664845662c0c58e642a8))
+* **solutions:** refresh 3 stale learnings + add 4 new installation debug docs ([d20c1d5](https://github.com/mathieubodin/scaleway-operator/commit/d20c1d5af55c680633e42eee162745d018750b2c))
+
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
 
 ### Bug Fixes
