@@ -54,7 +54,8 @@ impl OperatorMetrics {
             "scaleway_operator_reconcile_errors_total",
             "Total number of reconcile errors, labelled by error variant",
         );
-        let reconcile_errors_total = IntCounterVec::new(errors_opts, &["error_variant"])?;
+        let reconcile_errors_total =
+            IntCounterVec::new(errors_opts, &["error_variant"])?;
         registry.register(Box::new(reconcile_errors_total.clone()))?;
 
         let duration_opts = HistogramOpts::new(
@@ -62,7 +63,8 @@ impl OperatorMetrics {
             "Duration of reconcile loop iterations in seconds",
         )
         .buckets(Self::DURATION_BUCKETS.to_vec());
-        let reconcile_duration_seconds = HistogramVec::new(duration_opts, &["outcome"])?;
+        let reconcile_duration_seconds =
+            HistogramVec::new(duration_opts, &["outcome"])?;
         registry.register(Box::new(reconcile_duration_seconds.clone()))?;
 
         Ok(Self {
@@ -101,11 +103,7 @@ mod tests {
     fn test_new_registers_without_panic() {
         let registry = fresh_registry();
         let metrics = OperatorMetrics::new(&registry);
-        assert!(
-            metrics.is_ok(),
-            "registration should succeed: {:?}",
-            metrics.err()
-        );
+        assert!(metrics.is_ok(), "registration should succeed: {:?}", metrics.err());
     }
 
     #[test]
@@ -188,7 +186,8 @@ mod tests {
         let metrics = OperatorMetrics::new(&registry).unwrap();
         // Construct a kube::Error via SerdeError (wraps serde_json::Error).
         let serde_err: serde_json::Result<serde_json::Value> = serde_json::from_str("not json");
-        let err = OperatorError::KubeError(kube::Error::SerdeError(serde_err.unwrap_err()));
+        let err =
+            OperatorError::KubeError(kube::Error::SerdeError(serde_err.unwrap_err()));
         metrics.record_error(&err);
         assert_counter_value(&metrics, "KubeError", 1);
     }

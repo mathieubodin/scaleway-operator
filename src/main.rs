@@ -8,8 +8,8 @@ use scaleway_operator::{
     scaleway::ScalewayClient,
     server::run_axum_server,
 };
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[tokio::main]

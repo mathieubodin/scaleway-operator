@@ -66,14 +66,9 @@ mod tests {
     fn test_for_status_scaleway_error_extracts_message_field() {
         let e = OperatorError::ScalewayError {
             status: "403 Forbidden".to_string(),
-            message:
-                r#"{"message":"Permission denied","resource_id":"srv-abc123","type":"forbidden"}"#
-                    .to_string(),
+            message: r#"{"message":"Permission denied","resource_id":"srv-abc123","type":"forbidden"}"#.to_string(),
         };
-        assert_eq!(
-            e.for_status(),
-            "Scaleway API error: 403 Forbidden — Permission denied"
-        );
+        assert_eq!(e.for_status(), "Scaleway API error: 403 Forbidden — Permission denied");
     }
 
     #[test]
@@ -82,10 +77,7 @@ mod tests {
             status: "500 Internal Server Error".to_string(),
             message: "plain text error".to_string(),
         };
-        assert_eq!(
-            e.for_status(),
-            "Scaleway API error: 500 Internal Server Error"
-        );
+        assert_eq!(e.for_status(), "Scaleway API error: 500 Internal Server Error");
     }
 
     #[test]
@@ -142,9 +134,7 @@ impl OperatorError {
                 format!("Scaleway API error: {}", status)
             }
             // Sanitize variants that may embed internal URLs or API server addresses
-            OperatorError::NetworkError(_) => {
-                "Network error communicating with Scaleway API".to_string()
-            }
+            OperatorError::NetworkError(_) => "Network error communicating with Scaleway API".to_string(),
             OperatorError::KubeError(_) => "Kubernetes API error".to_string(),
             OperatorError::SerializationError(_) => "Response parsing error".to_string(),
             _ => self.to_string(),
