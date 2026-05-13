@@ -10,7 +10,7 @@ context.rs       — Struct Context partagé entre tous les réconciliateurs (cl
 resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, NamespaceRole
 reconcilers.rs   — Logique de réconciliation pour Instance ; error_policy commune
 scaleway.rs      — ScalewayClient : wrappeur reqwest sur l'API REST Scaleway
-error.rs         — OperatorError enum (11 variants) + sanitization pour le status CRD
+error.rs         — OperatorError enum (10 variants actives + FinalizationError réservé) + sanitization pour le status CRD
 metrics.rs       — Compteurs et histogrammes Prometheus + ReconcileMeasurer (RAII timer)
 server.rs        — Serveur axum : /healthz, /readyz, /metrics, /log-level
 ```
@@ -131,28 +131,39 @@ Régénérer les fichiers YAML : `cargo run --example crd_gen`.
 Chaque module a ses tests dans un bloc `#[cfg(test)]` en bas du fichier. Lancer avec :
 
 ```bash
-cargo test
+make test
 ```
 
 Pour les tests de `reconcilers.rs`, utiliser `make_test_context()` (défini dans le module de test) qui construit un `Context` avec un client kube factice et un `OperatorMetrics` frais.
 
 ### Tests d'intégration
 
-Dans `tests/integration.rs` — nécessitent un cluster Kubernetes accessible et les CRDs déployées. Ils sont marqués `#[ignore]` et ne tournent pas en CI automatique.
+Dans `tests/integration.rs` — nécessitent un cluster Kubernetes accessible et les CRDs déployées. Ils sont marqués `#[ignore]` et s'exécutent localement uniquement.
 
-Prérequis :
+Lancer en une commande (déploie les CRDs + fixtures + lance les tests) :
+
+```bash
+make run-integration-test-locally
+```
+
+Ou étape par étape :
 
 ```bash
 kubectl proxy --port=8001 &
 make deploy-crds
 make deploy-test-fixtures
+make test-integration
 ```
 
-Lancer :
+### Régénérer les fichiers CRD YAML
+
+Après toute modification de `resources.rs` :
 
 ```bash
-cargo test -- --ignored
+make generate-crds
 ```
+
+Génère `k8s/crd-instance.yaml` et `k8s/crd-namespacerole.yaml`.
 
 ### Tester un réconciliateur manuellement
 

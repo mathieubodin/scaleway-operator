@@ -2,8 +2,6 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: instances.scaleway.mathieubodin.io
-  labels:
-    io.mathieubodin.scaleway.k8s.crd.schema.version: 0.1.0
 spec:
   group: scaleway.mathieubodin.io
   names:
@@ -27,47 +25,32 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
-        description: Instance est une ressource Kubernetes gérant le cycle de vie d'une instance Scaleway Compute.
+        description: Auto-generated derived type for InstanceSpec via `CustomResource`
         properties:
           spec:
             properties:
               boot_volume_size:
                 default: 20
-                description: 'Taille du volume de boot en GB (défaut: 20, minimum: 20)'
-                example: 50
+                description: 'Boot volume size en GB (optionnel, défaut: 20)'
                 format: int32
-                minimum: 20
                 type: integer
               image:
-                description: 'Image Scaleway à utiliser (ex: ubuntu-jammy, debian-12, centos-stream-9)'
-                example: ubuntu-jammy
-                minLength: 1
+                description: Image à utiliser (ubuntu-jammy, debian-12, etc.)
                 type: string
               instance_type:
-                description: 'Type commercial Scaleway (ex: DEV1-S, GP1-M, PRO2-S, GPU-3090-S)'
-                example: DEV1-S
-                minLength: 1
-                pattern: '^[A-Z][A-Z0-9-]*$'
+                description: Type commercial (DEV1-S, GP1-M, GPU-3090, etc.)
                 type: string
               name:
-                description: 'Nom de l''instance dans Scaleway (lettres minuscules, chiffres, tirets — max 63 caractères)'
-                example: web-server-prod
-                maxLength: 63
-                minLength: 1
-                pattern: '^[a-z0-9][a-z0-9-]*$'
+                description: Nom de l'instance Scaleway
                 type: string
               network:
                 description: Configuration réseau optionnelle
                 nullable: true
                 properties:
                   enable_ipv6:
-                    description: Activer IPv6 sur l'instance
-                    example: false
                     nullable: true
                     type: boolean
                   public_ip:
-                    description: Assigner une IP publique à l'instance
-                    example: true
                     nullable: true
                     type: boolean
                 type: object
@@ -76,27 +59,17 @@ spec:
                 nullable: true
                 properties:
                   enable_firewall:
-                    description: Activer le pare-feu Scaleway sur l'instance
-                    example: true
                     nullable: true
                     type: boolean
                 type: object
               tags:
                 default: []
-                description: Tags Scaleway optionnels associés à l'instance
-                example:
-                  - prod
-                  - web
+                description: Tags optionnels
                 items:
-                  maxLength: 255
-                  minLength: 1
                   type: string
-                maxItems: 20
                 type: array
               zone:
-                description: 'Zone Scaleway cible (ex: fr-par-1, nl-ams-1, pl-waw-2)'
-                example: fr-par-1
-                pattern: '^[a-z]{2}-[a-z]{2,3}-[0-9]$'
+                description: Zone Scaleway (fr-par-1, nl-ams-1, etc.)
                 type: string
             required:
             - image
