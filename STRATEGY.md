@@ -46,6 +46,6 @@ _Lien avec l'approche :_ L'extensibilité native de Kubernetes n'a de valeur que
 
 ### Mise en place et documentation
 
-Rendre l'opérateur opérationnel en moins de 10 minutes.
+Rendre l'opérateur opérationnel en moins de 20 minutes.
 
 _Lien avec l'approche :_ Si l'onboarding est long ou opaque, les équipes n'adoptent pas l'opérateur et restent sur leurs pratiques existantes.
