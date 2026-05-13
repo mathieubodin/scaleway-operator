@@ -165,12 +165,3 @@ make generate-crds
 
 Génère `k8s/crd-instance.yaml` et `k8s/crd-namespacerole.yaml`.
 
-### Tester un réconciliateur manuellement
-
-Pour un test rapide contre un vrai cluster :
-
-```bash
-SCALEWAY_TOKEN=<token> SCALEWAY_ORG_ID=<org-id> cargo run
-kubectl apply -f k8s/examples.yaml
-kubectl get instances -w
-```
