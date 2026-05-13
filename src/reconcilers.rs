@@ -524,6 +524,9 @@ fn is_permanent_error(error: &OperatorError) -> bool {
             | OperatorError::ConfigError(_)
             | OperatorError::ProjectAccessDenied(_)
     )
+    // CircuitBreakerOpen is explicitly transient — backoff applies, not await_change
+    // KubeError, ScalewayError, NetworkError, SerializationError, FinalizationError, Unknown:
+    // all transient by exhaustive exclusion
 }
 
 pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
@@ -824,6 +827,7 @@ mod tests {
             metrics: fresh_metrics(),
             last_reconcile_at: AtomicI64::new(0),
             retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
+            circuit_breaker: std::sync::Mutex::new(crate::context::CircuitBreakerState::Closed { failure_count: 0 }),
         })
     }
 

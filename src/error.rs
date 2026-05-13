@@ -35,6 +35,9 @@ pub enum OperatorError {
 
     #[error("Unknown error: {0}")]
     Unknown(String),
+
+    #[error("Scaleway API circuit breaker open")]
+    CircuitBreakerOpen,
 }
 
 pub type Result<T> = std::result::Result<T, OperatorError>;
@@ -54,6 +57,7 @@ impl OperatorError {
             OperatorError::SerializationError(_) => "SerializationError",
             OperatorError::FinalizationError(_) => "FinalizationError",
             OperatorError::Unknown(_) => "Unknown",
+            OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
     }
 }
@@ -137,6 +141,7 @@ impl OperatorError {
             OperatorError::NetworkError(_) => "Network error communicating with Scaleway API".to_string(),
             OperatorError::KubeError(_) => "Kubernetes API error".to_string(),
             OperatorError::SerializationError(_) => "Response parsing error".to_string(),
+            OperatorError::CircuitBreakerOpen => "Scaleway API temporarily unavailable".to_string(),
             _ => self.to_string(),
         }
     }

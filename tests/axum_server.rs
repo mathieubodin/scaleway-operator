@@ -36,6 +36,7 @@ fn build_context_with_metrics(metrics: OperatorMetrics, last_reconcile_at: i64) 
         metrics,
         last_reconcile_at: AtomicI64::new(last_reconcile_at),
         retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
+        circuit_breaker: std::sync::Mutex::new(scaleway_operator::context::CircuitBreakerState::Closed { failure_count: 0 }),
     })
 }
 
