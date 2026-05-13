@@ -1,5 +1,5 @@
 use kube::core::CustomResourceExt;
-use scaleway_operator::resources::{Instance, LoadBalancer, NamespaceRole, Project};
+use scaleway_operator::resources::{Instance, NamespaceRole};
 use std::fs;
 
 fn main() {
@@ -7,12 +7,6 @@ fn main() {
 
     write_crd("k8s/crd-instance.yaml", &Instance::crd(), None);
     write_crd("k8s/crd-namespacerole.yaml", &NamespaceRole::crd(), None);
-    write_crd("k8s/crd-project.yaml", &Project::crd(), None);
-    write_crd(
-        "k8s/crd-loadbalancer.yaml",
-        &LoadBalancer::crd(),
-        Some("# Note: CRD définie mais non réconciliée par l'opérateur (v0.1)\n"),
-    );
 
     println!("CRDs generated in k8s/");
 }

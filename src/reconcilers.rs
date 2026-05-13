@@ -131,6 +131,22 @@ pub async fn reconcile_instance(
     instance: Arc<Instance>,
     ctx: Arc<Context>,
 ) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "{}/{}",
+        instance.namespace().unwrap_or_default(),
+        instance.name_any()
+    );
+    let result = reconcile_instance_inner(instance, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_instance_inner(
+    instance: Arc<Instance>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
     let namespace = instance.namespace().unwrap_or_default();
     let api: Api<Instance> = Api::namespaced(ctx.client.clone(), &namespace);
 
@@ -510,14 +526,27 @@ fn is_permanent_error(error: &OperatorError) -> bool {
     )
 }
 
-pub fn error_policy(_instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
+pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
     ctx.metrics.record_error(error);
     if is_permanent_error(error) {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
-        tracing::error!(error = %error, "Transient reconciliation error");
-        Action::requeue(Duration::from_secs(60))
+        let key = format!(
+            "{}/{}",
+            instance.namespace().unwrap_or_default(),
+            instance.name_any()
+        );
+        let attempts = ctx.increment_retry_count(&key);
+        // Backoff exponentiel : 30s, 60s, 120s, 240s, 300s (max)
+        let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
+        tracing::error!(
+            error = %error,
+            attempts = attempts,
+            retry_in_secs = delay_secs,
+            "Transient reconciliation error"
+        );
+        Action::requeue(Duration::from_secs(delay_secs))
     }
 }
 
@@ -794,6 +823,7 @@ mod tests {
             scaleway_base_url: "http://localhost:0".to_string(),
             metrics: fresh_metrics(),
             last_reconcile_at: AtomicI64::new(0),
+            retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 

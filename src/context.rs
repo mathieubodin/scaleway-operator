@@ -1,5 +1,7 @@
 use crate::scaleway::ScalewayClient;
 use kube::Client;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.mathieubodin.io/project-id";
 
@@ -10,6 +12,22 @@ pub struct Context {
     pub scaleway_base_url: String,
     pub metrics: crate::metrics::OperatorMetrics,
     pub last_reconcile_at: std::sync::atomic::AtomicI64,
+    pub retry_counts: Mutex<HashMap<String, u32>>,
+}
+
+impl Context {
+    /// Incrémente le compteur d'erreurs consécutives pour une ressource et retourne la nouvelle valeur.
+    pub fn increment_retry_count(&self, key: &str) -> u32 {
+        let mut counts = self.retry_counts.lock().unwrap();
+        let count = counts.entry(key.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    }
+
+    /// Remet à zéro le compteur après une réconciliation réussie.
+    pub fn reset_retry_count(&self, key: &str) {
+        self.retry_counts.lock().unwrap().remove(key);
+    }
 }
 
 /// Extraire le project_id depuis une annotation de namespace

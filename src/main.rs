@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_default()
                 .as_secs() as i64,
         ),
+        retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");

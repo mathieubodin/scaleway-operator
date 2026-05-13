@@ -113,6 +113,7 @@ impl TestFixture {
             )
             .unwrap(),
             last_reconcile_at: std::sync::atomic::AtomicI64::new(0),
+            retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 

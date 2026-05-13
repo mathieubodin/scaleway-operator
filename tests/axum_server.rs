@@ -35,6 +35,7 @@ fn build_context_with_metrics(metrics: OperatorMetrics, last_reconcile_at: i64) 
         scaleway_base_url: "http://localhost:0".to_string(),
         metrics,
         last_reconcile_at: AtomicI64::new(last_reconcile_at),
+        retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
     })
 }
 
