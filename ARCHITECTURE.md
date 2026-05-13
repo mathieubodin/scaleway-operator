@@ -122,7 +122,7 @@ use scaleway_operator::resources::{Instance, LoadBalancer, NamespaceRole};
 write_crd("k8s/crd-loadbalancer.yaml", &LoadBalancer::crd(), None);
 ```
 
-Régénérer les fichiers YAML : `cargo run --example crd_gen`.
+Régénérer les fichiers YAML : `make generate-crds`.
 
 ## Tests
 
