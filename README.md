@@ -54,7 +54,7 @@ Ces valeurs sont des UUIDs distincts — le token IAM n'est pas l'org UUID.
 ```bash
 helm upgrade scaleway-operator-crds \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator-crds \
-    --version 0.1.7 \
+    --version 0.1.8 \
     --namespace scaleway-system \
     --create-namespace \
     --install  # crds
