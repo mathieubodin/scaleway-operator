@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.1.8](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.7...scaleway-operator-v0.1.8) (2026-05-14)
+
+
+### Features
+
+* **chart:** add NOTES.txt to scaleway-operator-crds with orphaned CRD removal instructions ([b57fa8a](https://github.com/mathieubodin/scaleway-operator/commit/b57fa8afb7437f0519f2936864645bbbcd3f8f17))
+* **metrics:** add instances_total gauge and circuit breaker state machine ([decf05f](https://github.com/mathieubodin/scaleway-operator/commit/decf05f9c78f504444b62dd60b03f5e033f096cf))
+* **reconcilers:** wire gauge updates and circuit breaker ([aa57d64](https://github.com/mathieubodin/scaleway-operator/commit/aa57d64f2e79b85df119cf948f9c3597bd236d7a))
+
+
+### Bug Fixes
+
+* add exponential backoff on transient reconciliation errors ([d8b6c09](https://github.com/mathieubodin/scaleway-operator/commit/d8b6c0935a628e1cef376029d2952fbdac3c78d8))
+* remove LoadBalancer and Project CRDs from Helm chart ([789a673](https://github.com/mathieubodin/scaleway-operator/commit/789a673cc425de85444d6ff840cecd2f9d14b55c))
+* remove orphaned CRDs and complete README onboarding docs ([a1a1b31](https://github.com/mathieubodin/scaleway-operator/commit/a1a1b3133e26ff3e17bdbef6b23342b755c012a2))
+* remove stale CRD YAMLs and correct ARCHITECTURE.md commands ([ff7065d](https://github.com/mathieubodin/scaleway-operator/commit/ff7065df65d50edbe89988dd2127ca09a8894a38))
+
+
+### Documentation
+
+* add ARCHITECTURE.md with extension guide ([f1ce625](https://github.com/mathieubodin/scaleway-operator/commit/f1ce6255c82bac84c4444813ebdb59da30bc709f))
+* add STRATEGY.md ([84473ca](https://github.com/mathieubodin/scaleway-operator/commit/84473ca2fc09eff24562e513d86e9c3234c92b77))
+* add STRATEGY.md ([09bef07](https://github.com/mathieubodin/scaleway-operator/commit/09bef07bf2906a3370ae7f4de51f3d9a38770e3f))
+* **chart:** update scaleway-operator-crds README to remove orphaned CRDs ([e33be55](https://github.com/mathieubodin/scaleway-operator/commit/e33be555124ca4669a2654d8e0218b8d726081d5))
+* remove manual run section from ARCHITECTURE.md ([9599743](https://github.com/mathieubodin/scaleway-operator/commit/9599743dde7690496332fbbe3184db9fa7bae27c))
+* replace cargo run --example crd_gen with make generate-crds ([5509066](https://github.com/mathieubodin/scaleway-operator/commit/5509066a4780ac048f495b1814830f7f114bd538))
+* **solutions:** add circuit breaker pattern and prometheus crate decision ([49a2f45](https://github.com/mathieubodin/scaleway-operator/commit/49a2f451a868fb0dba687791a4d7857f142f898e))
+* **solutions:** add circuit breaker pattern and prometheus crate decision ([a793855](https://github.com/mathieubodin/scaleway-operator/commit/a7938555a72e8b3426203014474784a01c7572f3))
+* update onboarding time target to &lt; 20 minutes ([1e3f47b](https://github.com/mathieubodin/scaleway-operator/commit/1e3f47bdf891c06888f10778661fec745bcefd46))
+
 ## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.6...scaleway-operator-v0.1.7) (2026-05-12)
 
 
