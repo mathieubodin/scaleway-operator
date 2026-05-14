@@ -2,7 +2,7 @@ use futures::StreamExt;
 use kube::runtime::Controller;
 use kube::{Api, Client};
 use scaleway_operator::{
-    context::Context,
+    context::{CircuitBreakerState, Context},
     reconcilers::{error_policy, reconcile_instance},
     resources::Instance,
     scaleway::ScalewayClient,
@@ -47,6 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_default()
                 .as_secs() as i64,
         ),
+        retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
+        circuit_breaker: std::sync::Mutex::new(CircuitBreakerState::Closed { failure_count: 0 }),
     });
 
     tracing::debug!(org_id = %context.organization_id, "Initialized Scaleway operator");

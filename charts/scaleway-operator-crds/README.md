@@ -16,16 +16,13 @@ helm install scaleway-operator-crds \
 
 - `instances.scaleway.mathieubodin.io` (Namespaced) — reconciled
 - `namespaceroles.scaleway.mathieubodin.io` (Cluster) — reconciled
-- `projects.scaleway.mathieubodin.io` (Namespaced) — defined, not yet reconciled in v0.1
-- `loadbalancers.scaleway.mathieubodin.io` (Namespaced) — defined, not yet reconciled in v0.1
 
 ## Notes
 
 CRDs in this chart carry the annotation `helm.sh/resource-policy: keep`, which means they **survive `helm uninstall`**. This is intentional — deleting CRDs would destroy all custom resources in the cluster. To remove CRDs, delete them manually:
 
 ```bash
-kubectl delete crd instances.scaleway.mathieubodin.io namespaceroles.scaleway.mathieubodin.io \
-  projects.scaleway.mathieubodin.io loadbalancers.scaleway.mathieubodin.io
+kubectl delete crd instances.scaleway.mathieubodin.io namespaceroles.scaleway.mathieubodin.io
 ```
 
 ## Upgrading

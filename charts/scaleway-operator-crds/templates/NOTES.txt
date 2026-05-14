@@ -1,0 +1,24 @@
+Scaleway Operator CRDs {{ .Chart.Version }} installées.
+
+CRDs actives
+============
+  - instances.scaleway.mathieubodin.io
+  - namespaceroles.scaleway.mathieubodin.io
+
+MIGRATION — suppression des CRDs orphelines
+============================================
+Les CRDs suivantes ont été retirées du chart et ne sont plus réconciliées
+par l'opérateur. En raison de l'annotation helm.sh/resource-policy: keep,
+elles ne sont PAS supprimées automatiquement par helm upgrade.
+
+Si elles sont présentes sur ce cluster, supprimez-les manuellement :
+
+  # Vérifier leur présence
+  kubectl get crd loadbalancers.scaleway.mathieubodin.io \
+                   projects.scaleway.mathieubodin.io 2>/dev/null
+
+  # Supprimer (supprime aussi toutes les ressources de ces types)
+  kubectl delete crd loadbalancers.scaleway.mathieubodin.io \
+                     projects.scaleway.mathieubodin.io
+
+⚠ Vérifier qu'aucune ressource de ces types n'existe avant de supprimer.

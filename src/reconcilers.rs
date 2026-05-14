@@ -131,6 +131,22 @@ pub async fn reconcile_instance(
     instance: Arc<Instance>,
     ctx: Arc<Context>,
 ) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "{}/{}",
+        instance.namespace().unwrap_or_default(),
+        instance.name_any()
+    );
+    let result = reconcile_instance_inner(instance, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_instance_inner(
+    instance: Arc<Instance>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
     let namespace = instance.namespace().unwrap_or_default();
     let api: Api<Instance> = Api::namespaced(ctx.client.clone(), &namespace);
 
@@ -145,6 +161,18 @@ pub async fn reconcile_instance(
         let mut measurer =
             ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
         return handle_deletion(&instance, &api, &ctx, &mut measurer).await;
+    }
+
+    // 1b. Circuit breaker check — protège les étapes 2-9 (create/sync).
+    // La suppression (étape 1) est intentionnellement exempte du circuit : les ressources
+    // doivent pouvoir être supprimées même pendant une panne Scaleway.
+    if ctx.is_circuit_open() {
+        tracing::warn!(
+            name = %instance.name_any(),
+            namespace = %namespace,
+            "Scaleway API circuit breaker is open — skipping reconciliation"
+        );
+        return Err(OperatorError::CircuitBreakerOpen);
     }
 
     // 2. Obtenir le rôle Scaleway depuis la ressource NamespaceRole
@@ -261,9 +289,7 @@ pub async fn reconcile_instance(
         // Vérifier l'accès projet uniquement à la première création (status.project_id absent).
         // Sauter lors d'une re-création après InstanceNotFound : le projet était déjà validé.
         if status.project_id.is_none() {
-            ctx.scaleway_client
-                .verify_project_access(&project_id)
-                .await?;
+            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
         }
 
         // Cherche d'abord une instance existante par nom : récupère une instance
@@ -282,7 +308,7 @@ pub async fn reconcile_instance(
             }
             None => {
                 tracing::info!(name = %instance.name_any(), project_id = %project_id, "Creating new Scaleway instance");
-                match ns_client.create_instance(&instance.spec, &project_id).await {
+                match call_scaleway(&ctx, || ns_client.create_instance(&instance.spec, &project_id)).await {
                     Ok(id) => (id, false),
                     Err(e) => {
                         tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
@@ -303,6 +329,8 @@ pub async fn reconcile_instance(
         status.error_message = None;
         status.project_id = Some(project_id.clone());
 
+        ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, "creating");
+
         if adopted {
             measurer.set_outcome(ReconcileOutcome::Adopted);
         } else {
@@ -314,11 +342,16 @@ pub async fn reconcile_instance(
 
     // 9. Synchroniser l'état depuis Scaleway
     if let Some(instance_id) = &status.scaleway_id.clone() {
-        match ns_client
-            .get_instance(&instance.spec.zone, instance_id, &project_id)
-            .await
-        {
+        match call_scaleway(&ctx, || ns_client.get_instance(&instance.spec.zone, instance_id, &project_id)).await {
             Ok(info) => {
+                // Gauge swap: dec old state, inc new state
+                let old_state = instance.status.as_ref()
+                    .map(|s| s.state.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, &old_state);
+                ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, &info.state);
+
                 status.state = info.state.clone();
                 status.public_ip = info.public_ip;
                 status.project_id = Some(project_id.clone());
@@ -329,6 +362,13 @@ pub async fn reconcile_instance(
             }
             Err(OperatorError::InstanceNotFound(_)) => {
                 tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
+                // Decrement gauge only if the instance was previously created (scaleway_id present)
+                if instance.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
+                    let old_state = instance.status.as_ref()
+                        .map(|s| s.state.as_str())
+                        .unwrap_or("unknown");
+                    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
+                }
                 status.scaleway_id = None;
                 status.state = "unknown".to_string();
                 status.public_ip = None;
@@ -359,6 +399,24 @@ pub async fn reconcile_instance(
     Ok(Action::requeue(Duration::from_secs(30)))
 }
 
+/// Wraps a Scaleway API call to update the circuit breaker state.
+/// On success: calls record_scaleway_success().
+/// On transient error: calls record_scaleway_failure().
+/// On permanent error: does not affect the circuit (permanent errors are spec/config issues).
+async fn call_scaleway<T, F, Fut>(ctx: &Arc<Context>, f: F) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let result = f().await;
+    match &result {
+        Ok(_) => ctx.record_scaleway_success(),
+        Err(e) if !is_permanent_error(e) => ctx.record_scaleway_failure(),
+        _ => {}
+    }
+    result
+}
+
 async fn handle_deletion(
     instance: &Instance,
     api: &Api<Instance>,
@@ -375,10 +433,7 @@ async fn handle_deletion(
             let namespace = instance.namespace().unwrap_or_default();
             match get_namespace_client(ctx, &namespace).await {
                 Ok(ns_client) => {
-                    match ns_client
-                        .delete_instance(&instance.spec.zone, instance_id)
-                        .await
-                    {
+                    match call_scaleway(ctx, || ns_client.delete_instance(&instance.spec.zone, instance_id)).await {
                         Ok(_) => {
                             tracing::info!(
                                 name = %instance.name_any(),
@@ -436,6 +491,12 @@ async fn handle_deletion(
         measurer.set_outcome(ReconcileOutcome::Error);
         OperatorError::KubeError(e)
     })?;
+
+    // Decrement gauge: the instance is no longer managed
+    let old_state = instance.status.as_ref()
+        .map(|s| s.state.as_str())
+        .unwrap_or("unknown");
+    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
 
     measurer.set_outcome(ReconcileOutcome::Deleted);
     Ok(Action::await_change())
@@ -508,16 +569,40 @@ fn is_permanent_error(error: &OperatorError) -> bool {
             | OperatorError::ConfigError(_)
             | OperatorError::ProjectAccessDenied(_)
     )
+    // CircuitBreakerOpen is explicitly transient — backoff applies, not await_change
+    // KubeError, ScalewayError, NetworkError, SerializationError, FinalizationError, Unknown:
+    // all transient by exhaustive exclusion
 }
 
-pub fn error_policy(_instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
+pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
     ctx.metrics.record_error(error);
     if is_permanent_error(error) {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
-        tracing::error!(error = %error, "Transient reconciliation error");
-        Action::requeue(Duration::from_secs(60))
+        let key = format!(
+            "{}/{}",
+            instance.namespace().unwrap_or_default(),
+            instance.name_any()
+        );
+        let attempts = ctx.increment_retry_count(&key);
+        // Backoff exponentiel : 30s, 60s, 120s, 240s, 300s (max)
+        let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
+        if matches!(error, OperatorError::CircuitBreakerOpen) {
+            tracing::warn!(
+                attempts = attempts,
+                retry_in_secs = delay_secs,
+                "Scaleway API circuit breaker open — backing off"
+            );
+        } else {
+            tracing::error!(
+                error = %error,
+                attempts = attempts,
+                retry_in_secs = delay_secs,
+                "Transient reconciliation error"
+            );
+        }
+        Action::requeue(Duration::from_secs(delay_secs))
     }
 }
 
@@ -794,6 +879,8 @@ mod tests {
             scaleway_base_url: "http://localhost:0".to_string(),
             metrics: fresh_metrics(),
             last_reconcile_at: AtomicI64::new(0),
+            retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
+            circuit_breaker: std::sync::Mutex::new(crate::context::CircuitBreakerState::Closed { failure_count: 0 }),
         })
     }
 

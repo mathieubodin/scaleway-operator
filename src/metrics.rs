@@ -1,6 +1,6 @@
 use std::fmt;
 
-use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry};
+use prometheus::{GaugeVec, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry};
 
 use crate::error::OperatorError;
 
@@ -39,15 +39,16 @@ impl fmt::Display for ReconcileOutcome {
 pub struct OperatorMetrics {
     pub(crate) reconcile_errors_total: IntCounterVec,
     pub(crate) reconcile_duration_seconds: HistogramVec,
+    pub(crate) instances_total: GaugeVec,
 }
 
 impl OperatorMetrics {
     /// Buckets matching the observability plan: 0.1 s, 0.5 s, 1 s, 5 s, 15 s, 30 s.
     const DURATION_BUCKETS: &'static [f64] = &[0.1, 0.5, 1.0, 5.0, 15.0, 30.0];
 
-    /// Build and register both metrics into `registry`.
+    /// Build and register all metrics into `registry`.
     ///
-    /// Returns an error if either metric is already registered (e.g., in tests that
+    /// Returns an error if any metric is already registered (e.g., in tests that
     /// accidentally call `new` twice on the same registry).
     pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
         let errors_opts = Opts::new(
@@ -67,9 +68,17 @@ impl OperatorMetrics {
             HistogramVec::new(duration_opts, &["outcome"])?;
         registry.register(Box::new(reconcile_duration_seconds.clone()))?;
 
+        let instances_opts = Opts::new(
+            "scaleway_operator_instances_total",
+            "Number of Scaleway instances currently managed by the operator, by zone, type and state",
+        );
+        let instances_total = GaugeVec::new(instances_opts, &["zone", "instance_type", "state"])?;
+        registry.register(Box::new(instances_total.clone()))?;
+
         Ok(Self {
             reconcile_errors_total,
             reconcile_duration_seconds,
+            instances_total,
         })
     }
 
@@ -85,6 +94,23 @@ impl OperatorMetrics {
         self.reconcile_duration_seconds
             .with_label_values(&[outcome.as_str()])
             .observe(duration_secs);
+    }
+
+    /// Increment the instances gauge for a (zone, instance_type, state) tuple.
+    pub fn inc_instances(&self, zone: &str, instance_type: &str, state: &str) {
+        self.instances_total
+            .with_label_values(&[zone, instance_type, state])
+            .inc();
+    }
+
+    /// Decrement the instances gauge for a (zone, instance_type, state) tuple.
+    /// Note: prometheus GaugeVec accepts negative values — a decrement without a
+    /// prior increment (e.g., after an operator restart) produces -1.0, which is
+    /// observable but not blocking. The gauge self-corrects on the next reconcile cycle.
+    pub fn dec_instances(&self, zone: &str, instance_type: &str, state: &str) {
+        self.instances_total
+            .with_label_values(&[zone, instance_type, state])
+            .dec();
     }
 }
 
@@ -107,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_registers_both_metrics() {
+    fn test_new_registers_three_metrics() {
         // prometheus::Registry::gather() prunes empty MetricFamilies (no label values touched yet),
         // so we verify registration via the Collector descriptors instead.
         let registry = fresh_registry();
@@ -116,6 +142,7 @@ mod tests {
         use prometheus::core::Collector;
         let counter_descs = metrics.reconcile_errors_total.desc();
         let histogram_descs = metrics.reconcile_duration_seconds.desc();
+        let gauge_descs = metrics.instances_total.desc();
 
         assert_eq!(counter_descs.len(), 1);
         assert_eq!(
@@ -127,6 +154,61 @@ mod tests {
             histogram_descs[0].fq_name,
             "scaleway_operator_reconcile_duration_seconds"
         );
+        assert_eq!(gauge_descs.len(), 1);
+        assert_eq!(
+            gauge_descs[0].fq_name,
+            "scaleway_operator_instances_total"
+        );
+    }
+
+    fn gauge_value(metrics: &OperatorMetrics, zone: &str, instance_type: &str, state: &str) -> f64 {
+        metrics
+            .instances_total
+            .with_label_values(&[zone, instance_type, state])
+            .get()
+    }
+
+    #[test]
+    fn test_inc_instances_increments_to_one() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_instances("fr-par-1", "DEV1-S", "running");
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), 1.0);
+    }
+
+    #[test]
+    fn test_inc_instances_twice_reaches_two() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_instances("fr-par-1", "DEV1-S", "running");
+        metrics.inc_instances("fr-par-1", "DEV1-S", "running");
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), 2.0);
+    }
+
+    #[test]
+    fn test_dec_instances_after_inc_reaches_zero() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_instances("fr-par-1", "DEV1-S", "running");
+        metrics.dec_instances("fr-par-1", "DEV1-S", "running");
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), 0.0);
+    }
+
+    #[test]
+    fn test_dec_instances_without_prior_inc_is_negative() {
+        // GaugeVec accepts negative values — a decrement without a prior increment
+        // (e.g., after an operator restart during a reconcile cycle) produces -1.0.
+        // This is intentional: the value self-corrects on the next reconcile cycle.
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.dec_instances("fr-par-1", "DEV1-S", "running");
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), -1.0);
+    }
+
+    #[test]
+    fn test_inc_dec_are_label_scoped() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_instances("fr-par-1", "DEV1-S", "running");
+        metrics.inc_instances("nl-ams-1", "GP1-M", "stopped");
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), 1.0);
+        assert_eq!(gauge_value(&metrics, "nl-ams-1", "GP1-M", "stopped"), 1.0);
+        assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "stopped"), 0.0);
     }
 
     // ── ReconcileOutcome Display produces non-empty strings without spaces ───────
