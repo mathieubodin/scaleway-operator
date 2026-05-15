@@ -59,6 +59,89 @@ impl Drop for ReconcileMeasurer<'_> {
     }
 }
 
+// ── ReconcileInput / ReconcileDecision — pure decision layer ─────────────────
+
+/// Snapshot immuable des faits observables nécessaires à la décision de réconciliation.
+/// Tout champ relatif à l'I/O (scaleway_role, project_id) est initialisé à String::new()
+/// quand il n'est pas pertinent (suppression, circuit ouvert).
+struct ReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    scaleway_role: String,
+    project_id: String,
+    scaleway_id: Option<String>,
+    status_project_id: Option<String>,
+}
+
+/// Décision pure dérivée d'un `ReconcileInput`, sans effet de bord.
+enum ReconcileDecision {
+    /// Le circuit breaker est ouvert — ignorer cette réconciliation.
+    SkipCircuitOpen,
+    /// Ajouter le finalizer, puis requeue.
+    AddFinalizer,
+    /// Le rôle ne permet pas la création — bloquer avec erreur permanente.
+    BlockReadOnlyRole,
+    /// Vérifier l'accès projet, puis continuer directement vers la création.
+    VerifyProjectAccess { project_id: String },
+    /// Créer l'instance (accès projet déjà validé lors d'un cycle précédent).
+    CreateInstance { project_id: String },
+    /// Synchroniser l'état depuis Scaleway.
+    SyncInstance { scaleway_id: String, project_id: String },
+    /// Supprimer l'instance Scaleway puis retirer le finalizer.
+    DeleteInstance { scaleway_id: String },
+    /// Retirer le finalizer (aucune instance Scaleway connue).
+    RemoveFinalizer,
+    /// Requeue dans la durée indiquée sans I/O supplémentaire.
+    RequeueIn(Duration),
+}
+
+/// Dérive la prochaine action à effectuer à partir d'un snapshot d'état, sans effet de bord.
+fn decide_next_action(input: &ReconcileInput) -> ReconcileDecision {
+    // 1. Suppression prioritaire — avant toute autre vérification
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(id) => ReconcileDecision::DeleteInstance { scaleway_id: id.clone() },
+            None => ReconcileDecision::RemoveFinalizer,
+        };
+    }
+
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return ReconcileDecision::SkipCircuitOpen;
+    }
+
+    // 3. Finalizer absent — l'ajouter avant tout
+    if !input.finalizer_present {
+        return ReconcileDecision::AddFinalizer;
+    }
+
+    // 4. Instance déjà connue — synchroniser
+    if let Some(scaleway_id) = &input.scaleway_id {
+        return ReconcileDecision::SyncInstance {
+            scaleway_id: scaleway_id.clone(),
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 5. Création — vérifier le rôle
+    if !role_allows_write(&input.scaleway_role) {
+        return ReconcileDecision::BlockReadOnlyRole;
+    }
+
+    // 6. Vérification accès projet seulement à la première création
+    if input.status_project_id.is_none() {
+        return ReconcileDecision::VerifyProjectAccess {
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 7. Accès projet déjà validé — créer directement
+    ReconcileDecision::CreateInstance {
+        project_id: input.project_id.clone(),
+    }
+}
+
 /// Retourne true si le rôle autorise les opérations d'écriture sur les instances.
 fn role_allows_write(role: &str) -> bool {
     matches!(role, "Editor" | "Admin" | "OrganizationOwner")
@@ -156,127 +239,118 @@ async fn reconcile_instance_inner(
         "Reconciling instance"
     );
 
-    // 1. Suppression en priorité — avant tout lookup de ressources potentiellement absentes
-    if instance.metadata.deletion_timestamp.is_some() {
-        let mut measurer =
-            ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
-        return handle_deletion(&instance, &api, &ctx, &mut measurer).await;
-    }
+    // ── Collecte des inputs (Option A : collecte conditionnelle) ──────────────
 
-    // 1b. Circuit breaker check — protège les étapes 2-9 (create/sync).
-    // La suppression (étape 1) est intentionnellement exempte du circuit : les ressources
-    // doivent pouvoir être supprimées même pendant une panne Scaleway.
-    if ctx.is_circuit_open() {
-        tracing::warn!(
-            name = %instance.name_any(),
-            namespace = %namespace,
-            "Scaleway API circuit breaker is open — skipping reconciliation"
-        );
-        return Err(OperatorError::CircuitBreakerOpen);
-    }
+    let deletion_requested = instance.metadata.deletion_timestamp.is_some();
+    let circuit_open = ctx.is_circuit_open();
+    let finalizer_present = instance
+        .metadata
+        .finalizers
+        .as_ref()
+        .unwrap_or(&vec![])
+        .contains(&INSTANCE_FINALIZER.to_string());
 
-    // 2. Obtenir le rôle Scaleway depuis la ressource NamespaceRole
-    let scaleway_role = match get_scaleway_role_for_namespace(&ctx.client, &namespace).await {
-        Ok(role) => role,
-        Err(e) => {
-            tracing::error!(
-                name = %instance.name_any(),
-                namespace = %namespace,
-                error = %e,
-                "Cannot proceed without NamespaceRole"
-            );
-            let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.for_status());
-            status.sync_state = "Error".to_string();
-            let _ = update_status(&instance, &api, status).await;
-            return Err(e);
-        }
-    };
-
-    // 3. Obtenir le project_id depuis l'annotation du namespace
-    let project_id = match get_project_id_from_namespace(&instance, &ctx).await {
-        Ok(pid) => {
-            // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
-            if uuid::Uuid::parse_str(&pid).is_err() {
-                let e = OperatorError::ConfigError(format!(
-                    "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
-                    pid
-                ));
+    let (scaleway_role, project_id) = if !deletion_requested && !circuit_open {
+        // Obtenir le rôle Scaleway depuis la ressource NamespaceRole
+        let role = match get_scaleway_role_for_namespace(&ctx.client, &namespace).await {
+            Ok(role) => role,
+            Err(e) => {
+                tracing::error!(
+                    name = %instance.name_any(),
+                    namespace = %namespace,
+                    error = %e,
+                    "Cannot proceed without NamespaceRole"
+                );
                 let mut status = instance.status.clone().unwrap_or_default();
                 status.error_message = Some(e.for_status());
                 status.sync_state = "Error".to_string();
                 let _ = update_status(&instance, &api, status).await;
                 return Err(e);
             }
-            pid
-        }
-        Err(e) => {
-            tracing::error!(
+        };
+
+        // Obtenir le project_id depuis l'annotation du namespace
+        let pid = match get_project_id_from_namespace(&instance, &ctx).await {
+            Ok(pid) => {
+                // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
+                if uuid::Uuid::parse_str(&pid).is_err() {
+                    let e = OperatorError::ConfigError(format!(
+                        "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
+                        pid
+                    ));
+                    let mut status = instance.status.clone().unwrap_or_default();
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_status(&instance, &api, status).await;
+                    return Err(e);
+                }
+                pid
+            }
+            Err(e) => {
+                tracing::error!(
+                    name = %instance.name_any(),
+                    error = %e,
+                    "Cannot proceed without project_id from namespace annotation"
+                );
+                let mut status = instance.status.clone().unwrap_or_default();
+                status.error_message = Some(e.for_status());
+                status.sync_state = "Error".to_string();
+                let _ = update_status(&instance, &api, status).await;
+                return Err(e);
+            }
+        };
+
+        tracing::info!(
+            name = %instance.name_any(),
+            namespace = %namespace,
+            role = %role,
+            "Using Scaleway role for namespace"
+        );
+
+        (role, pid)
+    } else {
+        // Ignorés par decide_next_action dans les cas suppression/circuit ouvert
+        (String::new(), String::new())
+    };
+
+    let current_status = instance.status.clone().unwrap_or_default();
+
+    let input = ReconcileInput {
+        deletion_requested,
+        circuit_open,
+        finalizer_present,
+        scaleway_role: scaleway_role.clone(),
+        project_id: project_id.clone(),
+        scaleway_id: current_status.scaleway_id.clone(),
+        status_project_id: current_status.project_id.clone(),
+    };
+
+    // ── Décision pure ─────────────────────────────────────────────────────────
+
+    let decision = decide_next_action(&input);
+
+    // ── Exécution de l'I/O correspondante ────────────────────────────────────
+
+    match decision {
+        ReconcileDecision::SkipCircuitOpen => {
+            tracing::warn!(
                 name = %instance.name_any(),
-                error = %e,
-                "Cannot proceed without project_id from namespace annotation"
+                namespace = %namespace,
+                "Scaleway API circuit breaker is open — skipping reconciliation"
             );
-            let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.for_status());
-            status.sync_state = "Error".to_string();
-            let _ = update_status(&instance, &api, status).await;
-            return Err(e);
+            return Err(OperatorError::CircuitBreakerOpen);
         }
-    };
 
-    tracing::info!(
-        name = %instance.name_any(),
-        namespace = %namespace,
-        role = %scaleway_role,
-        "Using Scaleway role for namespace"
-    );
-
-    // 4. Ajouter le finalizer si absent
-    if !instance
-        .metadata
-        .finalizers
-        .as_ref()
-        .unwrap_or(&vec![])
-        .contains(&INSTANCE_FINALIZER.to_string())
-    {
-        add_finalizer(&instance, &api).await?;
-        return Ok(Action::requeue(Duration::from_secs(5)));
-    }
-
-    // Measurer is created here — after all early returns that don't represent a full
-    // reconcile cycle (deletion_timestamp, missing prerequisites, finalizer add).
-    let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
-
-    // 5. Valider la spec
-    if let Err(e) = validate_spec(&instance.spec, &ctx.scaleway_client).await {
-        measurer.set_outcome(ReconcileOutcome::Error);
-        return Err(e);
-    }
-
-    // 6. Lire les credentials IAM pré-provisionnés pour ce namespace
-    let ns_client = match get_namespace_client(&ctx, &namespace).await {
-        Ok(client) => client,
-        Err(e) => {
-            tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
-            let mut status = instance.status.clone().unwrap_or_default();
-            status.error_message = Some(e.for_status());
-            status.sync_state = "Error".to_string();
-            let _ = update_status(&instance, &api, status).await;
-            measurer.set_outcome(ReconcileOutcome::Error);
-            return Err(e);
+        ReconcileDecision::AddFinalizer => {
+            add_finalizer(&instance, &api).await?;
+            return Ok(Action::requeue(Duration::from_secs(5)));
         }
-    };
 
-    // 7. Récupérer le statut actuel
-    let mut status = instance.status.clone().unwrap_or_default();
-
-    // 8. Créer l'instance si elle n'existe pas
-    if status.scaleway_id.is_none() {
-        // Bloquer les opérations d'écriture pour les rôles en lecture seule
-        if !role_allows_write(&scaleway_role) {
+        ReconcileDecision::BlockReadOnlyRole => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
             let e = OperatorError::ConfigError(format!(
                 "Role '{}' is read-only and cannot create instances. Use 'Editor' or 'Admin'.",
-                scaleway_role
+                input.scaleway_role
             ));
             let mut status = instance.status.clone().unwrap_or_default();
             status.error_message = Some(e.for_status());
@@ -286,117 +360,212 @@ async fn reconcile_instance_inner(
             return Err(e);
         }
 
-        // Vérifier l'accès projet uniquement à la première création (status.project_id absent).
-        // Sauter lors d'une re-création après InstanceNotFound : le projet était déjà validé.
-        if status.project_id.is_none() {
-            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
-        }
+        ReconcileDecision::VerifyProjectAccess { project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
 
-        // Cherche d'abord une instance existante par nom : récupère une instance
-        // orpheline si le status n'a pas pu être écrit lors d'une réconciliation précédente.
-        let (instance_id, adopted) = match ns_client
-            .find_instance_by_name(&instance.spec.zone, &instance.spec.name, &project_id)
-            .await?
-        {
-            Some(existing_id) => {
-                tracing::warn!(
-                    name = %instance.name_any(),
-                    scaleway_id = %existing_id,
-                    "Adopted existing Scaleway instance (status write may have failed previously)"
-                );
-                (existing_id, true)
-            }
-            None => {
-                tracing::info!(name = %instance.name_any(), project_id = %project_id, "Creating new Scaleway instance");
-                match call_scaleway(&ctx, || ns_client.create_instance(&instance.spec, &project_id)).await {
-                    Ok(id) => (id, false),
-                    Err(e) => {
-                        tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
-                        status.error_message = Some(e.for_status());
-                        status.sync_state = "Error".to_string();
-                        update_status(&instance, &api, status).await?;
-                        measurer.set_outcome(ReconcileOutcome::Error);
-                        return Err(e);
-                    }
-                }
-            }
-        };
-
-        status.scaleway_id = Some(instance_id);
-        status.state = "creating".to_string();
-        status.created_at = Some(Utc::now());
-        status.sync_state = "Syncing".to_string();
-        status.error_message = None;
-        status.project_id = Some(project_id.clone());
-
-        ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, "creating");
-
-        if adopted {
-            measurer.set_outcome(ReconcileOutcome::Adopted);
-        } else {
-            measurer.set_outcome(ReconcileOutcome::Created);
-        }
-        update_status(&instance, &api, status.clone()).await?;
-        return Ok(Action::requeue(Duration::from_secs(10)));
-    }
-
-    // 9. Synchroniser l'état depuis Scaleway
-    if let Some(instance_id) = &status.scaleway_id.clone() {
-        match call_scaleway(&ctx, || ns_client.get_instance(&instance.spec.zone, instance_id, &project_id)).await {
-            Ok(info) => {
-                // Gauge swap: dec old state, inc new state
-                let old_state = instance.status.as_ref()
-                    .map(|s| s.state.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, &old_state);
-                ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, &info.state);
-
-                status.state = info.state.clone();
-                status.public_ip = info.public_ip;
-                status.project_id = Some(project_id.clone());
-                status.sync_state = "Synced".to_string();
-                status.error_message = None;
-                measurer.set_outcome(ReconcileOutcome::Synced);
-                update_status(&instance, &api, status).await?;
-            }
-            Err(OperatorError::InstanceNotFound(_)) => {
-                tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
-                // Decrement gauge only if the instance was previously created (scaleway_id present)
-                if instance.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
-                    let old_state = instance.status.as_ref()
-                        .map(|s| s.state.as_str())
-                        .unwrap_or("unknown");
-                    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
-                }
-                status.scaleway_id = None;
-                status.state = "unknown".to_string();
-                status.public_ip = None;
-                status.project_id = None;
-                status.created_at = None;
-                status.error_message = None;
-                status.sync_state = "Syncing".to_string();
-                if let Err(patch_err) = update_status(&instance, &api, status).await {
-                    tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after NotFound — will retry");
-                }
-                // Requeue at 30s (not 5s) to allow Scaleway eventual consistency
-                // to propagate before find_instance_by_name runs on the next cycle.
-                // This prevents duplicate creation during short propagation windows.
-                measurer.set_outcome(ReconcileOutcome::Error);
-                return Ok(Action::requeue(Duration::from_secs(30)));
-            }
-            Err(e) => {
-                tracing::warn!(name = %instance.name_any(), error = %e, "Failed to sync instance status");
-                status.error_message = Some(e.for_status());
-                status.sync_state = "Error".to_string();
-                update_status(&instance, &api, status).await?;
+            // Valider la spec
+            if let Err(e) = validate_spec(&instance.spec, &ctx.scaleway_client).await {
                 measurer.set_outcome(ReconcileOutcome::Error);
                 return Err(e);
             }
+
+            // Lire les credentials IAM pré-provisionnés pour ce namespace
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
+                    let mut st = instance.status.clone().unwrap_or_default();
+                    st.error_message = Some(e.for_status());
+                    st.sync_state = "Error".to_string();
+                    let _ = update_status(&instance, &api, st).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            // Vérifier l'accès projet
+            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
+
+            // Continuer directement vers la création dans le même cycle
+            execute_create_instance(&instance, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+        }
+
+        ReconcileDecision::CreateInstance { project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            // Valider la spec
+            if let Err(e) = validate_spec(&instance.spec, &ctx.scaleway_client).await {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                return Err(e);
+            }
+
+            // Lire les credentials IAM pré-provisionnés pour ce namespace
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
+                    let mut st = instance.status.clone().unwrap_or_default();
+                    st.error_message = Some(e.for_status());
+                    st.sync_state = "Error".to_string();
+                    let _ = update_status(&instance, &api, st).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            execute_create_instance(&instance, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+        }
+
+        ReconcileDecision::SyncInstance { scaleway_id, project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            // Valider la spec
+            if let Err(e) = validate_spec(&instance.spec, &ctx.scaleway_client).await {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                return Err(e);
+            }
+
+            // Lire les credentials IAM pré-provisionnés pour ce namespace
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::error!(name = %instance.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
+                    let mut st = instance.status.clone().unwrap_or_default();
+                    st.error_message = Some(e.for_status());
+                    st.sync_state = "Error".to_string();
+                    let _ = update_status(&instance, &api, st).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            let mut status = instance.status.clone().unwrap_or_default();
+
+            match call_scaleway(&ctx, || ns_client.get_instance(&instance.spec.zone, &scaleway_id, &project_id)).await {
+                Ok(info) => {
+                    // Gauge swap: dec old state, inc new state
+                    let old_state = instance.status.as_ref()
+                        .map(|s| s.state.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, &old_state);
+                    ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, &info.state);
+
+                    status.state = info.state.clone();
+                    status.public_ip = info.public_ip;
+                    status.project_id = Some(project_id.clone());
+                    status.sync_state = "Synced".to_string();
+                    status.error_message = None;
+                    measurer.set_outcome(ReconcileOutcome::Synced);
+                    update_status(&instance, &api, status).await?;
+                }
+                Err(OperatorError::InstanceNotFound(_)) => {
+                    tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
+                    // Decrement gauge only if the instance was previously created (scaleway_id present)
+                    if instance.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
+                        let old_state = instance.status.as_ref()
+                            .map(|s| s.state.as_str())
+                            .unwrap_or("unknown");
+                        ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
+                    }
+                    status.scaleway_id = None;
+                    status.state = "unknown".to_string();
+                    status.public_ip = None;
+                    status.project_id = None;
+                    status.created_at = None;
+                    status.error_message = None;
+                    status.sync_state = "Syncing".to_string();
+                    if let Err(patch_err) = update_status(&instance, &api, status).await {
+                        tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after NotFound — will retry");
+                    }
+                    // Requeue at 30s (not 5s) to allow Scaleway eventual consistency
+                    // to propagate before find_instance_by_name runs on the next cycle.
+                    // This prevents duplicate creation during short propagation windows.
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Ok(Action::requeue(Duration::from_secs(30)));
+                }
+                Err(e) => {
+                    tracing::warn!(name = %instance.name_any(), error = %e, "Failed to sync instance status");
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    update_status(&instance, &api, status).await?;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            }
+
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        ReconcileDecision::DeleteInstance { .. } | ReconcileDecision::RemoveFinalizer => {
+            handle_deletion(&instance, &api, &ctx).await
+        }
+
+        ReconcileDecision::RequeueIn(d) => {
+            return Ok(Action::requeue(d));
         }
     }
+}
 
-    Ok(Action::requeue(Duration::from_secs(30)))
+/// Logique de création partagée entre VerifyProjectAccess et CreateInstance.
+/// Le measurer doit avoir été créé par l'appelant.
+async fn execute_create_instance(
+    instance: &Instance,
+    api: &Api<Instance>,
+    ctx: &Arc<Context>,
+    _namespace: &str,
+    ns_client: &ScalewayClient,
+    project_id: &str,
+    measurer: &mut ReconcileMeasurer<'_>,
+) -> std::result::Result<Action, OperatorError> {
+    let mut status = instance.status.clone().unwrap_or_default();
+
+    // Cherche d'abord une instance existante par nom : récupère une instance
+    // orpheline si le status n'a pas pu être écrit lors d'une réconciliation précédente.
+    let (instance_id, adopted) = match ns_client
+        .find_instance_by_name(&instance.spec.zone, &instance.spec.name, project_id)
+        .await?
+    {
+        Some(existing_id) => {
+            tracing::warn!(
+                name = %instance.name_any(),
+                scaleway_id = %existing_id,
+                "Adopted existing Scaleway instance (status write may have failed previously)"
+            );
+            (existing_id, true)
+        }
+        None => {
+            tracing::info!(name = %instance.name_any(), project_id = %project_id, "Creating new Scaleway instance");
+            match call_scaleway(ctx, || ns_client.create_instance(&instance.spec, project_id)).await {
+                Ok(id) => (id, false),
+                Err(e) => {
+                    tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    update_status(instance, api, status).await?;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            }
+        }
+    };
+
+    status.scaleway_id = Some(instance_id);
+    status.state = "creating".to_string();
+    status.created_at = Some(Utc::now());
+    status.sync_state = "Syncing".to_string();
+    status.error_message = None;
+    status.project_id = Some(project_id.to_string());
+
+    ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, "creating");
+
+    if adopted {
+        measurer.set_outcome(ReconcileOutcome::Adopted);
+    } else {
+        measurer.set_outcome(ReconcileOutcome::Created);
+    }
+    update_status(instance, api, status.clone()).await?;
+    Ok(Action::requeue(Duration::from_secs(10)))
 }
 
 /// Wraps a Scaleway API call to update the circuit breaker state.
@@ -421,8 +590,9 @@ async fn handle_deletion(
     instance: &Instance,
     api: &Api<Instance>,
     ctx: &Arc<Context>,
-    measurer: &mut ReconcileMeasurer<'_>,
 ) -> std::result::Result<Action, OperatorError> {
+    let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
     tracing::info!(
         name = %instance.name_any(),
         "Deleting instance"
