@@ -780,6 +780,77 @@ pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Con
 mod tests {
     use super::*;
 
+    // ── decide_next_action unit tests ───────────────────────────────────────
+
+    fn base_input() -> ReconcileInput {
+        ReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            scaleway_role: "Editor".to_string(),
+            project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            scaleway_id: None,
+            // status_project_id défini → CreateInstance (pas VerifyProjectAccess)
+            status_project_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_decide_circuit_open_returns_skip() {
+        let input = ReconcileInput { circuit_open: true, ..base_input() };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::SkipCircuitOpen));
+    }
+
+    #[test]
+    fn test_decide_finalizer_absent_returns_add_finalizer() {
+        let input = ReconcileInput { finalizer_present: false, ..base_input() };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::AddFinalizer));
+    }
+
+    #[test]
+    fn test_decide_readonly_role_no_scaleway_id_returns_block() {
+        let input = ReconcileInput {
+            scaleway_role: "Viewer".to_string(),
+            ..base_input()
+        };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::BlockReadOnlyRole));
+    }
+
+    #[test]
+    fn test_decide_no_scaleway_id_write_role_returns_create() {
+        let input = base_input();
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::CreateInstance { .. }));
+    }
+
+    #[test]
+    fn test_decide_scaleway_id_present_returns_sync() {
+        let input = ReconcileInput {
+            scaleway_id: Some("srv-abc123".to_string()),
+            ..base_input()
+        };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::SyncInstance { .. }));
+    }
+
+    #[test]
+    fn test_decide_deletion_with_scaleway_id_returns_delete() {
+        let input = ReconcileInput {
+            deletion_requested: true,
+            scaleway_id: Some("srv-abc123".to_string()),
+            ..base_input()
+        };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::DeleteInstance { .. }));
+    }
+
+    #[test]
+    fn test_decide_deletion_without_scaleway_id_returns_remove_finalizer() {
+        let input = ReconcileInput {
+            deletion_requested: true,
+            scaleway_id: None,
+            ..base_input()
+        };
+        assert!(matches!(decide_next_action(&input), ReconcileDecision::RemoveFinalizer));
+    }
+
     // --- role_allows_write ---
 
     #[test]
