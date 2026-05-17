@@ -119,15 +119,15 @@ run-integration-test-locally: check-cargo check-kubeconfig deploy-crds deploy-te
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	mkdir -p $(COVERAGE_DIR)
-	cargo llvm-cov --html
+	cargo llvm-cov --lib --tests --html
 	@echo "Report: $(COVERAGE_DIR)/html/index.html"
 
 coverage-json: check-llvm-cov ## Teste l'application et produit un rapport JSON
 	mkdir -p $(COVERAGE_DIR)
-	cargo llvm-cov --json > $(COVERAGE_DIR)/cov.json
+	cargo llvm-cov --lib --tests --json > $(COVERAGE_DIR)/cov.json
 
 coverage-text: check-llvm-cov ## Teste l'application et affiche la couverture par fichier dans le terminal
-	cargo llvm-cov --text
+	cargo llvm-cov --lib --tests --text
 
 check: check-cargo check-helm check-markdownlint ## Lint et format
 	cargo fmt
