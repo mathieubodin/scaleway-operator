@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage-json env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
+.PHONY: help build check coverage coverage-json coverage-text env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -118,11 +118,16 @@ run-integration-test-locally: check-cargo check-kubeconfig deploy-crds deploy-te
 	fi
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
-	cargo llvm-cov --html 2>/dev/null
+	mkdir -p $(COVERAGE_DIR)
+	cargo llvm-cov --html
 	@echo "Report: $(COVERAGE_DIR)/html/index.html"
 
 coverage-json: check-llvm-cov ## Teste l'application et produit un rapport JSON
-	cargo llvm-cov --json 2>/dev/null | jq "." > $(COVERAGE_DIR)/cov.json
+	mkdir -p $(COVERAGE_DIR)
+	cargo llvm-cov --json > $(COVERAGE_DIR)/cov.json
+
+coverage-text: check-llvm-cov ## Teste l'application et affiche la couverture par fichier dans le terminal
+	cargo llvm-cov --text
 
 check: check-cargo check-helm check-markdownlint ## Lint et format
 	cargo fmt
