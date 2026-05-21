@@ -10,7 +10,7 @@ use kube::api::{DeleteParams, Patch, PatchParams, PostParams};
 use kube::{Api, Client};
 use scaleway_operator::{
     context::Context,
-    resources::{Instance, InstanceSpec, InstanceStatus},
+    resources::{Instance, InstanceSpec, InstanceStatus, LoadBalancer, LoadBalancerSpec},
     scaleway::ScalewayClient,
 };
 use std::sync::Arc;
@@ -556,4 +556,73 @@ async fn test_scaleway_error_sets_sync_state_error() {
     assert!(result.is_err(), "Expected Err on Scaleway 500");
     let status = updated.status.expect("Expected status");
     assert_eq!(status.sync_state, "Error");
+}
+
+// ── LoadBalancer integration tests ────────────────────────────────────────────
+//
+// Prérequis : même que les tests Instance.
+// Ces tests vérifient la réconciliation de bout en bout du LoadBalancer.
+
+fn build_load_balancer(ns: &str, name: &str) -> LoadBalancer {
+    LoadBalancer {
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(ns.to_string()),
+            ..Default::default()
+        },
+        spec: LoadBalancerSpec {
+            name: name.to_string(),
+            zone: "fr-par-1".to_string(),
+            lb_type: "LB-S".to_string(),
+            description: None,
+        },
+        status: None,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires kubectl proxy :8001 and make deploy-test-fixtures"]
+async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let mut server = mockito::Server::new_async().await;
+
+    // Mock NamespaceRole lookup (handled by kube API, not mocked here)
+    // The reconciler should add the finalizer on the first reconcile cycle.
+
+    let name = unique_name("lb-test");
+    let lb_api: Api<LoadBalancer> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+
+    let lb = lb_api
+        .create(&PostParams::default(), &build_load_balancer(NS_EDITOR, &name))
+        .await
+        .expect("Failed to create LoadBalancer CR");
+
+    let ctx = fixture.ctx(&server.url());
+    let result = scaleway_operator::reconcilers::reconcile_load_balancer(Arc::new(lb), ctx).await;
+
+    let updated = lb_api.get(&name).await.expect("Failed to re-fetch LoadBalancer");
+    let _ = lb_api.delete(&name, &DeleteParams::default()).await;
+    drop(server);
+
+    // AddFinalizer returns Ok(requeue 5s)
+    assert!(result.is_ok(), "Expected Ok on first reconcile, got {:?}", result);
+    assert!(
+        updated.metadata.finalizers.unwrap_or_default().contains(&"scaleway.mathieubodin.io/loadbalancer-finalizer".to_string()),
+        "Finalizer should be present after first reconcile"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires kubectl proxy :8001, make deploy-test-fixtures, and valid Scaleway credentials"]
+async fn test_loadbalancer_create_sync_delete() {
+    // Full lifecycle test: apply CR → observe scaleway_id → delete CR → observe finalizer removal.
+    // This test requires valid Scaleway credentials in the scaleway-ns-creds-scw-test-editor secret.
+    let _fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    // Implementation deferred — requires a live Scaleway account with LB permissions.
+    // Steps:
+    // 1. Apply a LoadBalancer CR
+    // 2. Wait up to 60s for status.scaleway_id to be populated
+    // 3. Delete the CR
+    // 4. Wait up to 60s for finalizer to be removed
+    todo!("implement full LB lifecycle integration test")
 }
