@@ -1,11 +1,12 @@
 use kube::core::CustomResourceExt;
-use scaleway_operator::resources::{Instance, NamespaceRole};
+use scaleway_operator::resources::{Instance, LoadBalancer, NamespaceRole};
 use std::fs;
 
 fn main() {
     fs::create_dir_all("k8s").expect("failed to create k8s/");
 
     write_crd("k8s/crd-instance.yaml", &Instance::crd(), None);
+    write_crd("k8s/crd-loadbalancer.yaml", &LoadBalancer::crd(), None);
     write_crd("k8s/crd-namespacerole.yaml", &NamespaceRole::crd(), None);
 
     println!("CRDs generated in k8s/");
