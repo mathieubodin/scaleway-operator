@@ -20,6 +20,12 @@ Thumbs.db
 .env
 .env.local
 
+# Claude code
+settings.local.json
+
+# RTK
+.rtk/
+
 # Compound engineering
 .context/compound-engineering
 docs/ideation

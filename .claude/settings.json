@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./*)",
+      "Edit(./*.md)",
+      "Edit(./.release-please-manifest.json)",
+      "Edit(./Dockerfile)",
+      "Edit(./Makefile)",
+      "Edit(./prek.toml)",
+      "Edit(./release-please-config.json)",
+      "Edit(./.github/*)",
+      "Edit(./charts/*)",
+      "Edit(./docs/*)",
+      "Edit(./k8s/*)",
+      "Edit(./src/*)",
+      "Edit(./tests/*)"
+    ]
+  }
+}
