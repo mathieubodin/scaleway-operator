@@ -124,6 +124,10 @@ pub struct LoadBalancerSpec {
     /// Description optionnelle
     #[serde(default)]
     pub description: Option<String>,
+
+    /// Tags optionnels
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

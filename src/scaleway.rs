@@ -337,8 +337,7 @@ impl ScalewayClient {
         cr_name: &str,
     ) -> Result<String> {
         let mut tags = Self::lb_operator_tags(namespace, cr_name);
-        // Preserve any user-defined tags from the spec
-        tags.extend(vec![]);
+        tags.extend(spec.tags.iter().cloned());
 
         let body = json!({
             "name": &spec.name,
@@ -966,6 +965,7 @@ mod tests {
             zone: "fr-par-1".to_string(),
             lb_type: "LB-S".to_string(),
             description: None,
+            tags: vec![],
         }
     }
 

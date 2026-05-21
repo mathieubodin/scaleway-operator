@@ -1199,28 +1199,6 @@ async fn validate_lb_spec(spec: &crate::resources::LoadBalancerSpec, scaleway_cl
     Ok(())
 }
 
-pub fn error_policy_lb(lb: Arc<LoadBalancer>, error: &OperatorError, ctx: Arc<Context>) -> Action {
-    ctx.metrics.record_error(error);
-    if is_permanent_error(error) {
-        tracing::warn!(error = %error, "Permanent LB configuration error — waiting for spec change");
-        Action::await_change()
-    } else {
-        let key = format!(
-            "loadbalancer/{}/{}",
-            lb.namespace().unwrap_or_default(),
-            lb.name_any()
-        );
-        let attempts = ctx.increment_retry_count(&key);
-        let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
-        if matches!(error, OperatorError::CircuitBreakerOpen) {
-            tracing::warn!(attempts = attempts, retry_in_secs = delay_secs, "LB circuit breaker open — backing off");
-        } else {
-            tracing::error!(error = %error, attempts = attempts, retry_in_secs = delay_secs, "Transient LB reconciliation error");
-        }
-        Action::requeue(Duration::from_secs(delay_secs))
-    }
-}
-
 /// Retourne true si l'erreur est permanente (spec/config incorrecte, ne pas requeue).
 /// Fonction extraite pour être testable sans dépendance sur Arc<Instance> ou Arc<Context>.
 fn is_permanent_error(error: &OperatorError) -> bool {
@@ -1237,36 +1215,32 @@ fn is_permanent_error(error: &OperatorError) -> bool {
     // all transient by exhaustive exclusion
 }
 
-pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
-    ctx.metrics.record_error(error);
+fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
     if is_permanent_error(error) {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
-        let key = format!(
-            "instance/{}/{}",
-            instance.namespace().unwrap_or_default(),
-            instance.name_any()
-        );
         let attempts = ctx.increment_retry_count(&key);
         // Backoff exponentiel : 30s, 60s, 120s, 240s, 300s (max)
         let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
         if matches!(error, OperatorError::CircuitBreakerOpen) {
-            tracing::warn!(
-                attempts = attempts,
-                retry_in_secs = delay_secs,
-                "Scaleway API circuit breaker open — backing off"
-            );
+            tracing::warn!(attempts = attempts, retry_in_secs = delay_secs, "Scaleway API circuit breaker open — backing off");
         } else {
-            tracing::error!(
-                error = %error,
-                attempts = attempts,
-                retry_in_secs = delay_secs,
-                "Transient reconciliation error"
-            );
+            tracing::error!(error = %error, attempts = attempts, retry_in_secs = delay_secs, "Transient reconciliation error");
         }
         Action::requeue(Duration::from_secs(delay_secs))
     }
+}
+
+pub fn error_policy<R: kube::ResourceExt>(
+    kind: &'static str,
+    resource: Arc<R>,
+    error: &OperatorError,
+    ctx: Arc<Context>,
+) -> Action {
+    ctx.metrics.record_error(error);
+    let key = format!("{}/{}/{}", kind, resource.namespace().unwrap_or_default(), resource.name_any());
+    error_policy_inner(key, error, &ctx)
 }
 
 #[cfg(test)]
@@ -1762,7 +1736,7 @@ mod tests {
     async fn test_error_policy_increments_config_error_counter() {
         let ctx = make_test_context();
         let err = OperatorError::ConfigError("bad annotation".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
@@ -1783,7 +1757,7 @@ mod tests {
     async fn test_error_policy_increments_unknown_error_counter() {
         let ctx = make_test_context();
         let err = OperatorError::Unknown("mystery".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
@@ -1797,13 +1771,98 @@ mod tests {
     async fn test_error_policy_counter_accumulates() {
         let ctx = make_test_context();
         let err = OperatorError::ConfigError("x".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
             .with_label_values(&["ConfigError"])
             .get();
         assert_eq!(value, 2);
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_permanent_error_returns_await_change() {
+        let ctx = make_test_context();
+        for err in [
+            OperatorError::InvalidZone("bad".to_string()),
+            OperatorError::InvalidInstanceType("bad".to_string()),
+            OperatorError::InvalidLbType("bad".to_string()),
+            OperatorError::ConfigError("bad".to_string()),
+            OperatorError::ProjectAccessDenied("bad".to_string()),
+        ] {
+            let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+            assert_eq!(action, Action::await_change(), "expected await_change for {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_transient_error_returns_requeue_with_backoff() {
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+
+        // 1re tentative → 30s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(30)));
+
+        // 2e tentative → 60s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(60)));
+
+        // 3e tentative → 120s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(120)));
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_circuit_breaker_returns_requeue() {
+        let ctx = make_test_context();
+        let err = OperatorError::CircuitBreakerOpen;
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        // CircuitBreakerOpen est transitoire : requeue (pas await_change)
+        assert!(matches!(action, Action { .. }));
+        assert_ne!(action, Action::await_change());
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_backoff_caps_at_300s() {
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+        // 10 tentatives atteignent le plafond de 300s
+        let mut last = Action::requeue(Duration::from_secs(0));
+        for _ in 0..10 {
+            last = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        }
+        assert_eq!(last, Action::requeue(Duration::from_secs(300)));
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_loadbalancer_kind_uses_separate_retry_counter() {
+        use crate::resources::{LoadBalancer, LoadBalancerSpec};
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+
+        let lb = Arc::new(LoadBalancer {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: LoadBalancerSpec {
+                name: "test".to_string(),
+                zone: "fr-par-1".to_string(),
+                lb_type: "LB-S".to_string(),
+                description: None,
+                tags: vec![],
+            },
+            status: None,
+        });
+
+        // Instance et LB partagent le même namespace/name mais des compteurs distincts
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
+        let lb_action = error_policy("loadbalancer", lb, &err, ctx.clone());
+
+        // Le LB est à la 1re tentative (30s), pas à la 2e (60s)
+        assert_eq!(lb_action, Action::requeue(Duration::from_secs(30)));
     }
 }

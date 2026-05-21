@@ -575,6 +575,7 @@ fn build_load_balancer(ns: &str, name: &str) -> LoadBalancer {
             zone: "fr-par-1".to_string(),
             lb_type: "LB-S".to_string(),
             description: None,
+            tags: vec![],
         },
         status: None,
     }

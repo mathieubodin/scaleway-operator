@@ -3,7 +3,7 @@ use kube::runtime::Controller;
 use kube::{Api, Client};
 use scaleway_operator::{
     context::{CircuitBreakerState, Context},
-    reconcilers::{error_policy, error_policy_lb, reconcile_instance, reconcile_load_balancer},
+    reconcilers::{error_policy, reconcile_instance, reconcile_load_balancer},
     resources::{Instance, LoadBalancer},
     scaleway::ScalewayClient,
     server::run_axum_server,
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lb_api = Api::<LoadBalancer>::all(client);
 
     let instance_ctrl = Controller::new(instance_api, Default::default())
-        .run(reconcile_instance, error_policy, Arc::clone(&context))
+        .run(reconcile_instance, |obj, err, ctx| error_policy("instance", obj, err, ctx), Arc::clone(&context))
         .for_each(|res| async move {
             if let Err(e) = res {
                 tracing::error!(error = %e, "Instance reconciliation failed");
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
     let lb_ctrl = Controller::new(lb_api, Default::default())
-        .run(reconcile_load_balancer, error_policy_lb, Arc::clone(&context))
+        .run(reconcile_load_balancer, |obj, err, ctx| error_policy("loadbalancer", obj, err, ctx), Arc::clone(&context))
         .for_each(|res| async move {
             if let Err(e) = res {
                 tracing::error!(error = %e, "LoadBalancer reconciliation failed");
