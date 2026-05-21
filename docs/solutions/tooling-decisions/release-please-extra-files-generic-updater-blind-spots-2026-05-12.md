@@ -23,9 +23,11 @@ tags:
 
 ## Context
 
-Lors de la configuration de `extra-files: ["README.md"]` sous le package `charts/scaleway-operator` pour maintenir automatiquement les versions helm dans le README, une analyse des angles morts a révélé trois contraintes non documentées dans le plan initial.
+> **Note préventive** : `extra-files` n'est pas configuré dans l'actuel `release-please-config.json`. Ce document documente les angles morts à connaître **avant** d'ajouter cette configuration.
 
-Configuration en place :
+Si `extra-files: ["README.md"]` était ajouté sous le package `charts/scaleway-operator` pour maintenir automatiquement les versions helm dans le README, une analyse des angles morts révèle trois contraintes non documentées officiellement.
+
+Configuration hypothétique :
 
 ```json
 "charts/scaleway-operator": {
