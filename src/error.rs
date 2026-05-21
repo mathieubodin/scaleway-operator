@@ -23,6 +23,9 @@ pub enum OperatorError {
     #[error("Invalid instance type: {0}")]
     InvalidInstanceType(String),
 
+    #[error("Invalid load balancer type: {0}")]
+    InvalidLbType(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -56,6 +59,7 @@ impl OperatorError {
             OperatorError::LbNotFound(_) => "LbNotFound",
             OperatorError::InvalidZone(_) => "InvalidZone",
             OperatorError::InvalidInstanceType(_) => "InvalidInstanceType",
+            OperatorError::InvalidLbType(_) => "InvalidLbType",
             OperatorError::ConfigError(_) => "ConfigError",
             OperatorError::NetworkError(_) => "NetworkError",
             OperatorError::SerializationError(_) => "SerializationError",

@@ -512,7 +512,7 @@ impl ScalewayClient {
         if valid_types.contains(&lb_type) {
             Ok(())
         } else {
-            Err(OperatorError::InvalidInstanceType(lb_type.to_string()))
+            Err(OperatorError::InvalidLbType(lb_type.to_string()))
         }
     }
 
@@ -1079,6 +1079,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_find_load_balancer_by_name_429_returns_err() {
+        // Régression: 429 rate-limit ne doit PAS retourner Ok(None) — même protection que Instance
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs".to_string()),
+            )
+            .with_status(429)
+            .with_body(r#"{"message": "rate limited"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_load_balancer_by_name("fr-par-1", "default", "my-lb", "proj-x")
+            .await;
+
+        assert!(result.is_err(), "429 must return Err, not Ok(None)");
+    }
+
+    #[tokio::test]
     async fn test_get_load_balancer_success() {
         let mut server = mockito::Server::new_async().await;
         server
@@ -1200,7 +1222,7 @@ mod tests {
         let result = test_client().validate_lb_type("MEGA-LB").await;
         assert!(matches!(
             result,
-            Err(OperatorError::InvalidInstanceType(_))
+            Err(OperatorError::InvalidLbType(_))
         ));
     }
 

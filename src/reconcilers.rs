@@ -255,9 +255,12 @@ async fn get_namespace_client(ctx: &Arc<Context>, namespace: &str) -> Result<Sca
     ))
 }
 
-/// Récupérer le project_id depuis l'annotation du namespace
-async fn get_project_id_from_namespace(instance: &Instance, ctx: &Arc<Context>) -> Result<String> {
-    let namespace = instance.namespace().unwrap_or_default();
+/// Récupérer le project_id depuis l'annotation du namespace pour n'importe quelle ressource.
+async fn get_project_id_from_namespace_resource(
+    resource: &impl kube::ResourceExt,
+    ctx: &Arc<Context>,
+) -> Result<String> {
+    let namespace = resource.namespace().unwrap_or_default();
     let api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(ctx.client.clone());
 
     let ns = api.get(&namespace).await.map_err(|e| {
@@ -339,7 +342,7 @@ async fn reconcile_instance_inner(
         };
 
         // Obtenir le project_id depuis l'annotation du namespace
-        let pid = match get_project_id_from_namespace(&instance, &ctx).await {
+        let pid = match get_project_id_from_namespace_resource(instance.as_ref(), &ctx).await {
             Ok(pid) => {
                 // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
                 if uuid::Uuid::parse_str(&pid).is_err() {
@@ -851,7 +854,7 @@ async fn reconcile_load_balancer_inner(
             }
         };
 
-        let pid = match get_project_id_from_lb_namespace(&lb, &ctx).await {
+        let pid = match get_project_id_from_namespace_resource(lb.as_ref(), &ctx).await {
             Ok(pid) => {
                 if uuid::Uuid::parse_str(&pid).is_err() {
                     let e = OperatorError::ConfigError(format!(
@@ -972,21 +975,8 @@ async fn reconcile_load_balancer_inner(
 
         LbReconcileDecision::SyncLoadBalancer { scaleway_id, project_id } => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
-
-            let ns_client = match get_namespace_client(&ctx, &namespace).await {
-                Ok(client) => client,
-                Err(e) => {
-                    tracing::error!(name = %lb.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
-                    let mut st = lb.status.clone().unwrap_or_default();
-                    st.error_message = Some(e.for_status());
-                    st.sync_state = "Error".to_string();
-                    let _ = update_lb_status(&lb, &api, st).await;
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    return Err(e);
-                }
-            };
-
-            let _ = ns_client; // ns_client fetched for future use; GET lb uses global token for now
+            // GET uses the global operator token (read-only scope).
+            // TODO: migrate to ns_client when the namespace IAM key covers read operations.
 
             let mut status = lb.status.clone().unwrap_or_default();
 
@@ -1152,7 +1142,14 @@ async fn handle_lb_deletion(
                     st.error_message = Some(
                         "IAM Secret missing at deletion time — Scaleway LB may still exist".to_string(),
                     );
-                    let _ = update_lb_status(lb, api, st).await;
+                    if let Err(patch_err) = update_lb_status(lb, api, st).await {
+                        tracing::error!(
+                            name = %lb.name_any(),
+                            lb_id = %lb_id,
+                            error = %patch_err,
+                            "Failed to write FinalizerRemovedWithoutScalewayDelete audit status — potential LB orphan in Scaleway"
+                        );
+                    }
                 }
             }
         }
@@ -1189,22 +1186,6 @@ async fn update_lb_status(lb: &LoadBalancer, api: &Api<LoadBalancer>, status: Lo
     let patch = serde_json::json!({"status": status});
     api.patch_status(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch)).await?;
     Ok(())
-}
-
-async fn get_project_id_from_lb_namespace(lb: &LoadBalancer, ctx: &Arc<Context>) -> Result<String> {
-    let namespace = lb.namespace().unwrap_or_default();
-    let api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(ctx.client.clone());
-
-    let ns = api.get(&namespace).await.map_err(|e| {
-        OperatorError::ConfigError(format!("Cannot access namespace {}: {}", namespace, e))
-    })?;
-
-    extract_project_id_from_namespace(ns.annotations()).ok_or_else(|| {
-        OperatorError::ConfigError(format!(
-            "Namespace '{}' must have annotation 'scaleway.mathieubodin.io/project-id'",
-            namespace
-        ))
-    })
 }
 
 async fn validate_lb_spec(spec: &crate::resources::LoadBalancerSpec, scaleway_client: &ScalewayClient) -> Result<()> {
@@ -1247,6 +1228,7 @@ fn is_permanent_error(error: &OperatorError) -> bool {
         error,
         OperatorError::InvalidZone(_)
             | OperatorError::InvalidInstanceType(_)
+            | OperatorError::InvalidLbType(_)
             | OperatorError::ConfigError(_)
             | OperatorError::ProjectAccessDenied(_)
     )
