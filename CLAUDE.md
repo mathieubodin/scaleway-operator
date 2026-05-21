@@ -7,7 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Use `make` as the single entry point (see `Makefile` for full list, `make help` to display):
 
 - Tester la conformite de l'environnement : `make env-check`
-- Tester l'application                    : `make coverage-json`
+- Tester (unitaires, rapide)              : `make coverage-text`
+- Tester l'application (rapport HTML)     : `make coverage`
+- Tester l'application (rapport JSON/CI)  : `make coverage-json`
+- Générer les manifests CRD               : `make generate-crds`
 - Construire le binaire                   : `make build`
 - Lint et format                          : `make check`
 - Nettoyer les artefacts                  : `make clean`
@@ -16,6 +19,16 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 - Deployer les CRDS                       : `make deploy-crds`
 - Deployer la stack operateur             : `make deploy`
 - Verifier l'etat du deploiement          : `make deploy-status`
+
+> ⚠️ Toute modification de `src/resources.rs` (CRDs) doit être suivie de `make generate-crds`
+> pour régénérer les manifests dans `k8s/`.
+
+**Tests d'intégration (prérequis) :**
+
+```bash
+make deploy-test-fixtures  # une seule fois par cluster (namespaces/NamespaceRoles/Secrets de test)
+make test-integration      # nécessite kubectl proxy sur :8001
+```
 
 **Prérequis pour les targets deploy :**
 
@@ -49,13 +62,15 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
 
 - **`main.rs`**:
       - Initialise le tracing
-      - Lit les variables d'environnement (`SCALEWAY_TOKEN`, `SCALEWAY_ORG_ID`, `SCALEWAY_PROJECT_ID`)
+      - Lit les variables d'environnement (`SCALEWAY_TOKEN`, `SCALEWAY_ORG_ID`)
       - Construit le `Context` partagé
       - Lance le `Controller` kube-rs sur la ressource `Instance`.
 - **`resources.rs`**: Définit les CRDs via la macro `#[derive(CustomResource)]` : `Instance`, `Project`, `LoadBalancer`, `NamespaceRole` (cluster-wide).
 - **`context.rs`**: Struct `Context` partagé entre les réconciliateurs.
     Contient aussi les helpers pour extraire les annotations de namespace (`scaleway.mathieubodin.io/project-id`, `scaleway.mathieubodin.io/organization-id`) et `get_scaleway_role_for_namespace` qui cherche la ressource `NamespaceRole` par nom de namespace.
+
 - **`reconcilers.rs`** — `reconcile_instance` : logique de réconciliation en 9 étapes (rôle namespace → project_id → finalizer → validation → create/sync). `error_policy` requeue après 60s en cas d'erreur.
+    La décision est séparée dans `decide_next_action(&input) -> ReconcileDecision` (couche pure, testable unitairement) ; les effets de bord sont dans `reconcile_instance_inner`.
 - **`scaleway.rs`** — `ScalewayClient` wrappant `reqwest`. Appels REST à `https://api.scaleway.com`. Authentification via header `X-Auth-Token`.
 - **`error.rs`** — `OperatorError` enum avec `thiserror`, couvrant les erreurs kube, Scaleway, réseau et configuration. Expose `metric_label()` pour produire le label Prometheus PascalCase de chaque variant.
 - **`metrics.rs`** — `ReconcileOutcome` enum et `OperatorMetrics` struct (compteur `scaleway_operator_reconcile_errors_total` + histogramme `scaleway_operator_reconcile_duration_seconds`). `ReconcileMeasurer` RAII dans `reconcilers.rs` consomme ces handles.
