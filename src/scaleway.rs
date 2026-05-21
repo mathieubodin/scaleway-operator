@@ -1,5 +1,5 @@
 use crate::error::{OperatorError, Result};
-use crate::resources::InstanceSpec;
+use crate::resources::{InstanceSpec, LoadBalancerSpec};
 use reqwest::Client as ReqwestClient;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -317,6 +317,179 @@ impl ScalewayClient {
         Ok(())
     }
 
+    // ============== LoadBalancer Operations ==============
+
+    /// Tag key prefix used to link a Scaleway LB back to its Kubernetes CR.
+    /// Scaleway LB names are not unique within a project, so tags are the
+    /// authoritative discriminator for orphan adoption.
+    fn lb_operator_tags(namespace: &str, cr_name: &str) -> Vec<String> {
+        vec![
+            format!("scaleway-operator-cr-namespace={}", namespace),
+            format!("scaleway-operator-cr-name={}", cr_name),
+        ]
+    }
+
+    pub async fn create_load_balancer(
+        &self,
+        spec: &LoadBalancerSpec,
+        project_id: &str,
+        namespace: &str,
+        cr_name: &str,
+    ) -> Result<String> {
+        let mut tags = Self::lb_operator_tags(namespace, cr_name);
+        // Preserve any user-defined tags from the spec
+        tags.extend(vec![]);
+
+        let body = json!({
+            "name": &spec.name,
+            "type": &spec.lb_type,
+            "project_id": project_id,
+            "description": spec.description.as_deref().unwrap_or(""),
+            "tags": tags,
+        });
+
+        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, &spec.zone);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Auth-Token", &self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["id"]
+            .as_str()
+            .ok_or_else(|| OperatorError::Unknown("No LB ID in response".to_string()))?
+            .to_string())
+    }
+
+    /// Searches for a LB by operator tags. Returns the ID of the first match.
+    /// Because Scaleway LB names are not unique within a project, name alone is
+    /// not a reliable discriminator — tags seeded at creation are used instead.
+    pub async fn find_load_balancer_by_name(
+        &self,
+        zone: &str,
+        namespace: &str,
+        cr_name: &str,
+        project_id: &str,
+    ) -> Result<Option<String>> {
+        let tags = Self::lb_operator_tags(namespace, cr_name);
+        let tag_filter = tags.join(",");
+
+        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, zone);
+
+        let response = self
+            .http_client
+            .get(&url)
+            .query(&[("project_id", project_id), ("tags", &tag_filter)])
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => {}
+            reqwest::StatusCode::NOT_FOUND => return Ok(None),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                return Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                });
+            }
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["lbs"]
+            .as_array()
+            .and_then(|lbs| lbs.first())
+            .and_then(|lb| lb["id"].as_str())
+            .map(|id| id.to_string()))
+    }
+
+    pub async fn get_load_balancer(&self, zone: &str, lb_id: &str) -> Result<LoadBalancerInfo> {
+        let url = format!("{}/lb/v1/zones/{}/lbs/{}", self.base_url, zone, lb_id);
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => {}
+            reqwest::StatusCode::NOT_FOUND => {
+                return Err(OperatorError::LbNotFound(lb_id.to_string()));
+            }
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                return Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                });
+            }
+        }
+
+        let data: Value = response.json().await?;
+        let id = data["id"]
+            .as_str()
+            .ok_or_else(|| OperatorError::Unknown("Missing lb.id in response".to_string()))?
+            .to_string();
+
+        Ok(LoadBalancerInfo {
+            id,
+            state: data["status"].as_str().unwrap_or("unknown").to_string(),
+            vip_address: data["ip"]
+                .as_array()
+                .and_then(|ips| ips.first())
+                .and_then(|ip| ip["ip_address"].as_str())
+                .map(|s| s.to_string()),
+        })
+    }
+
+    pub async fn delete_load_balancer(
+        &self,
+        zone: &str,
+        lb_id: &str,
+        release_ip: bool,
+    ) -> Result<()> {
+        let url = format!("{}/lb/v1/zones/{}/lbs/{}", self.base_url, zone, lb_id);
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .query(&[("release_ip", release_ip.to_string().as_str())])
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            reqwest::StatusCode::NOT_FOUND => Ok(()),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                })
+            }
+        }
+    }
+
     // ============== Validation ==============
 
     pub async fn validate_zone(&self, zone: &str) -> Result<()> {
@@ -329,6 +502,17 @@ impl ScalewayClient {
             Ok(())
         } else {
             Err(OperatorError::InvalidZone(zone.to_string()))
+        }
+    }
+
+    pub async fn validate_lb_type(&self, lb_type: &str) -> Result<()> {
+        // Types LB Scaleway (liste non exhaustive — types commerciaux actuels)
+        let valid_types = ["LB-S", "LB-GP"];
+
+        if valid_types.contains(&lb_type) {
+            Ok(())
+        } else {
+            Err(OperatorError::InvalidInstanceType(lb_type.to_string()))
         }
     }
 
@@ -357,6 +541,14 @@ pub struct InstanceInfo {
     pub public_ip: Option<String>,
     #[allow(dead_code)]
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadBalancerInfo {
+    #[allow(dead_code)]
+    pub id: String,
+    pub state: String,
+    pub vip_address: Option<String>,
 }
 
 #[cfg(test)]
@@ -763,6 +955,252 @@ mod tests {
         assert!(matches!(
             result,
             Err(crate::error::OperatorError::ConfigError(_))
+        ));
+    }
+
+    // --- LoadBalancer API ---
+
+    fn test_lb_spec() -> LoadBalancerSpec {
+        LoadBalancerSpec {
+            name: "my-lb".to_string(),
+            zone: "fr-par-1".to_string(),
+            lb_type: "LB-S".to_string(),
+            description: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_load_balancer_success() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/lb/v1/zones/fr-par-1/lbs")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "lb-abc123", "status": "pending"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_load_balancer(&test_lb_spec(), "proj-x", "default", "my-lb")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        assert_eq!(result.unwrap(), "lb-abc123");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_load_balancer_403_returns_scaleway_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/lb/v1/zones/fr-par-1/lbs")
+            .with_status(403)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"message": "forbidden"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_load_balancer(&test_lb_spec(), "proj-x", "default", "my-lb")
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OperatorError::ScalewayError { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_find_load_balancer_by_name_found() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"lbs": [{"id": "lb-found"}]}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_load_balancer_by_name("fr-par-1", "default", "my-lb", "proj-x")
+            .await;
+
+        assert_eq!(result.unwrap(), Some("lb-found".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_find_load_balancer_by_name_empty_returns_none() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"lbs": []}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_load_balancer_by_name("fr-par-1", "default", "my-lb", "proj-x")
+            .await;
+
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_find_load_balancer_by_name_403_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs".to_string()),
+            )
+            .with_status(403)
+            .with_body(r#"{"message": "forbidden"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_load_balancer_by_name("fr-par-1", "default", "my-lb", "proj-x")
+            .await;
+
+        assert!(result.is_err(), "403 must return Err, not Ok(None)");
+    }
+
+    #[tokio::test]
+    async fn test_get_load_balancer_success() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-123".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "lb-123", "status": "ready", "ip": [{"ip_address": "1.2.3.4"}]}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client.get_load_balancer("fr-par-1", "lb-123").await;
+
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.id, "lb-123");
+        assert_eq!(info.state, "ready");
+        assert_eq!(info.vip_address, Some("1.2.3.4".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_load_balancer_404_returns_lb_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-gone".to_string()),
+            )
+            .with_status(404)
+            .with_body("")
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client.get_load_balancer("fr-par-1", "lb-gone").await;
+
+        assert!(
+            matches!(result, Err(OperatorError::LbNotFound(id)) if id == "lb-gone")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_load_balancer_success() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-del".to_string()),
+            )
+            .with_status(204)
+            .with_body("")
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .delete_load_balancer("fr-par-1", "lb-del", true)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_load_balancer_404_is_idempotent() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-gone".to_string()),
+            )
+            .with_status(404)
+            .with_body("")
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .delete_load_balancer("fr-par-1", "lb-gone", true)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_load_balancer_409_locked_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-locked".to_string()),
+            )
+            .with_status(409)
+            .with_body(r#"{"message": "lb is locked"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .delete_load_balancer("fr-par-1", "lb-locked", true)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OperatorError::ScalewayError { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_lb_type_valid() {
+        let client = test_client();
+        assert!(client.validate_lb_type("LB-S").await.is_ok());
+        assert!(client.validate_lb_type("LB-GP").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_lb_type_invalid() {
+        let result = test_client().validate_lb_type("MEGA-LB").await;
+        assert!(matches!(
+            result,
+            Err(OperatorError::InvalidInstanceType(_))
         ));
     }
 
