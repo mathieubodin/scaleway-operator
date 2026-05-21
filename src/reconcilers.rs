@@ -147,6 +147,74 @@ fn role_allows_write(role: &str) -> bool {
     matches!(role, "Editor" | "Admin" | "OrganizationOwner")
 }
 
+// ── LbReconcileInput / LbReconcileDecision — couche de décision pure LoadBalancer ──
+
+struct LbReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    scaleway_role: String,
+    project_id: String,
+    scaleway_id: Option<String>,
+    status_project_id: Option<String>,
+}
+
+enum LbReconcileDecision {
+    SkipCircuitOpen,
+    AddLbFinalizer,
+    BlockReadOnlyRole,
+    VerifyProjectAccessLb { project_id: String },
+    CreateLoadBalancer { project_id: String },
+    SyncLoadBalancer { scaleway_id: String, project_id: String },
+    DeleteLoadBalancer { scaleway_id: String },
+    RemoveLbFinalizer,
+}
+
+fn decide_next_action_lb(input: &LbReconcileInput) -> LbReconcileDecision {
+    // 1. Suppression prioritaire — avant toute autre vérification
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(id) => LbReconcileDecision::DeleteLoadBalancer { scaleway_id: id.clone() },
+            None => LbReconcileDecision::RemoveLbFinalizer,
+        };
+    }
+
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return LbReconcileDecision::SkipCircuitOpen;
+    }
+
+    // 3. Finalizer absent — l'ajouter avant tout
+    if !input.finalizer_present {
+        return LbReconcileDecision::AddLbFinalizer;
+    }
+
+    // 4. LB déjà connu — synchroniser
+    if let Some(scaleway_id) = &input.scaleway_id {
+        return LbReconcileDecision::SyncLoadBalancer {
+            scaleway_id: scaleway_id.clone(),
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 5. Création — vérifier le rôle
+    if !role_allows_write(&input.scaleway_role) {
+        return LbReconcileDecision::BlockReadOnlyRole;
+    }
+
+    // 6. Vérification accès projet seulement à la première création
+    if input.status_project_id.is_none() {
+        return LbReconcileDecision::VerifyProjectAccessLb {
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 7. Accès projet déjà validé — créer directement
+    LbReconcileDecision::CreateLoadBalancer {
+        project_id: input.project_id.clone(),
+    }
+}
+
 /// Lit les credentials IAM pré-provisionnés pour ce namespace depuis un Secret Kubernetes.
 ///
 /// Convention : Secret `scaleway-ns-creds-{namespace}` dans `scaleway-system`,
@@ -886,6 +954,109 @@ mod tests {
     #[test]
     fn test_unknown_role_does_not_allow_write() {
         assert!(!role_allows_write("UnknownRole"));
+    }
+
+    // ── decide_next_action_lb unit tests ───────────────────────────────────────
+
+    fn base_lb_input() -> LbReconcileInput {
+        LbReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            scaleway_role: "Editor".to_string(),
+            project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            scaleway_id: None,
+            status_project_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_lb_decide_default_base_returns_create() {
+        let input = base_lb_input();
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::CreateLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_finalizer_absent_returns_add_finalizer() {
+        let input = LbReconcileInput { finalizer_present: false, ..base_lb_input() };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::AddLbFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_circuit_open_returns_skip() {
+        let input = LbReconcileInput { circuit_open: true, ..base_lb_input() };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::SkipCircuitOpen
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_scaleway_id_present_returns_sync() {
+        let input = LbReconcileInput {
+            scaleway_id: Some("lb-abc".to_string()),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::SyncLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_deletion_with_scaleway_id_returns_delete() {
+        let input = LbReconcileInput {
+            deletion_requested: true,
+            scaleway_id: Some("lb-abc".to_string()),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::DeleteLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_deletion_without_scaleway_id_returns_remove_finalizer() {
+        let input = LbReconcileInput {
+            deletion_requested: true,
+            scaleway_id: None,
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::RemoveLbFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_viewer_role_returns_block() {
+        let input = LbReconcileInput {
+            scaleway_role: "Viewer".to_string(),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::BlockReadOnlyRole
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_no_status_project_id_returns_verify() {
+        let input = LbReconcileInput {
+            status_project_id: None,
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::VerifyProjectAccessLb { .. }
+        ));
     }
 
     // --- is_permanent_error / error_policy classification ---
