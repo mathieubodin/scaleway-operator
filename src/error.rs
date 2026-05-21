@@ -14,6 +14,9 @@ pub enum OperatorError {
     #[error("Instance not found: {0}")]
     InstanceNotFound(String),
 
+    #[error("Load balancer not found: {0}")]
+    LbNotFound(String),
+
     #[error("Invalid zone: {0}")]
     InvalidZone(String),
 
@@ -50,6 +53,7 @@ impl OperatorError {
             OperatorError::ScalewayError { .. } => "ScalewayError",
             OperatorError::ProjectAccessDenied(_) => "ProjectAccessDenied",
             OperatorError::InstanceNotFound(_) => "InstanceNotFound",
+            OperatorError::LbNotFound(_) => "LbNotFound",
             OperatorError::InvalidZone(_) => "InvalidZone",
             OperatorError::InvalidInstanceType(_) => "InvalidInstanceType",
             OperatorError::ConfigError(_) => "ConfigError",
@@ -119,6 +123,18 @@ mod tests {
     fn test_for_status_config_error_passthrough() {
         let e = OperatorError::ConfigError("bad annotation".to_string());
         assert_eq!(e.for_status(), "Configuration error: bad annotation");
+    }
+
+    #[test]
+    fn test_lb_not_found_metric_label() {
+        let e = OperatorError::LbNotFound("lb-abc123".to_string());
+        assert_eq!(e.metric_label(), "LbNotFound");
+    }
+
+    #[test]
+    fn test_lb_not_found_for_status_passthrough() {
+        let e = OperatorError::LbNotFound("lb-xyz".to_string());
+        assert_eq!(e.for_status(), "Load balancer not found: lb-xyz");
     }
 }
 
