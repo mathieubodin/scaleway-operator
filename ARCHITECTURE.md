@@ -164,4 +164,3 @@ make generate-crds
 ```
 
 Génère `k8s/crd-instance.yaml` et `k8s/crd-namespacerole.yaml`.
-

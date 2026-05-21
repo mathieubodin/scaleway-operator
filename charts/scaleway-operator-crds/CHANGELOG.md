@@ -2,16 +2,13 @@
 
 ## [0.1.8](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.7...scaleway-operator-crds-v0.1.8) (2026-05-14)
 
-
 ### Features
 
 * **chart:** add NOTES.txt to scaleway-operator-crds with orphaned CRD removal instructions ([b57fa8a](https://github.com/mathieubodin/scaleway-operator/commit/b57fa8afb7437f0519f2936864645bbbcd3f8f17))
 
-
 ### Bug Fixes
 
 * remove LoadBalancer and Project CRDs from Helm chart ([789a673](https://github.com/mathieubodin/scaleway-operator/commit/789a673cc425de85444d6ff840cecd2f9d14b55c))
-
 
 ### Documentation
 
@@ -19,12 +16,10 @@
 
 ## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.6...scaleway-operator-crds-v0.1.7) (2026-05-12)
 
-
 ### Bug Fixes
 
 * **charts:** align appVersion with deployed binary version 0.1.6 ([a7b7ccf](https://github.com/mathieubodin/scaleway-operator/commit/a7b7ccfdf1b4a190deb6ad203f868ac9a2d2e4c1))
 * **release:** replace broken extra-files with post-release README version sync ([0e4ff63](https://github.com/mathieubodin/scaleway-operator/commit/0e4ff63ce9dcb8b66e5b110e6d0f6198bc0e9b4e))
-
 
 ### Documentation
 

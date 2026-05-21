@@ -124,6 +124,7 @@ Notez le **Project UUID** (visible dans les paramètres du projet, sous "Project
 **2. Créer une IAM Application**
 
 Dans la console Scaleway : **IAM** → **Applications** → **Créer une application**.
+
 - Donnez-lui un nom explicite (ex. : `k8s-operator-production`)
 - Notez son ID
 

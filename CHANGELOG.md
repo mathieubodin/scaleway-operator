@@ -2,13 +2,11 @@
 
 ## [0.1.8](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.7...scaleway-operator-v0.1.8) (2026-05-14)
 
-
 ### Features
 
 * **chart:** add NOTES.txt to scaleway-operator-crds with orphaned CRD removal instructions ([b57fa8a](https://github.com/mathieubodin/scaleway-operator/commit/b57fa8afb7437f0519f2936864645bbbcd3f8f17))
 * **metrics:** add instances_total gauge and circuit breaker state machine ([decf05f](https://github.com/mathieubodin/scaleway-operator/commit/decf05f9c78f504444b62dd60b03f5e033f096cf))
 * **reconcilers:** wire gauge updates and circuit breaker ([aa57d64](https://github.com/mathieubodin/scaleway-operator/commit/aa57d64f2e79b85df119cf948f9c3597bd236d7a))
-
 
 ### Bug Fixes
 
@@ -16,7 +14,6 @@
 * remove LoadBalancer and Project CRDs from Helm chart ([789a673](https://github.com/mathieubodin/scaleway-operator/commit/789a673cc425de85444d6ff840cecd2f9d14b55c))
 * remove orphaned CRDs and complete README onboarding docs ([a1a1b31](https://github.com/mathieubodin/scaleway-operator/commit/a1a1b3133e26ff3e17bdbef6b23342b755c012a2))
 * remove stale CRD YAMLs and correct ARCHITECTURE.md commands ([ff7065d](https://github.com/mathieubodin/scaleway-operator/commit/ff7065df65d50edbe89988dd2127ca09a8894a38))
-
 
 ### Documentation
 
@@ -32,14 +29,12 @@
 
 ## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.6...scaleway-operator-v0.1.7) (2026-05-12)
 
-
 ### Bug Fixes
 
 * **charts:** align appVersion with deployed binary version 0.1.6 ([a7b7ccf](https://github.com/mathieubodin/scaleway-operator/commit/a7b7ccfdf1b4a190deb6ad203f868ac9a2d2e4c1))
 * **release:** replace broken extra-files with post-release README sync job ([5c00738](https://github.com/mathieubodin/scaleway-operator/commit/5c0073825b947b523d1ca80a862036fcfe2c053b))
 * **release:** replace broken extra-files with post-release README version sync ([0e4ff63](https://github.com/mathieubodin/scaleway-operator/commit/0e4ff63ce9dcb8b66e5b110e6d0f6198bc0e9b4e))
 * **release:** use package-relative path for extra-files README ([b17dcc6](https://github.com/mathieubodin/scaleway-operator/commit/b17dcc6b7cfcbb45655afd72679ce2fd361c42d3))
-
 
 ### Documentation
 
