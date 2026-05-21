@@ -504,7 +504,7 @@ impl ScalewayClient {
         }
     }
 
-    pub async fn validate_lb_type(&self, lb_type: &str) -> Result<()> {
+    pub fn validate_lb_type(&self, lb_type: &str) -> Result<()> {
         // Types LB Scaleway (liste non exhaustive — types commerciaux actuels)
         let valid_types = ["LB-S", "LB-GP"];
 
@@ -515,7 +515,7 @@ impl ScalewayClient {
         }
     }
 
-    pub async fn validate_instance_type(&self, instance_type: &str) -> Result<()> {
+    pub fn validate_instance_type(&self, instance_type: &str) -> Result<()> {
         // Types valides (non exhaustif)
         let valid_types = [
             "DEV1-S", "DEV1-M", "DEV1-L", "DEV1-XL", "GP1-XS", "GP1-S", "GP1-M", "GP1-L", "GP1-XL",
@@ -619,17 +619,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_instance_type_dev1_s() {
-        assert!(test_client().validate_instance_type("DEV1-S").await.is_ok());
+        assert!(test_client().validate_instance_type("DEV1-S").is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_instance_type_gp1_xl() {
-        assert!(test_client().validate_instance_type("GP1-XL").await.is_ok());
+        assert!(test_client().validate_instance_type("GP1-XL").is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_instance_type_unknown() {
-        let result = test_client().validate_instance_type("MEGA-XL").await;
+        let result = test_client().validate_instance_type("MEGA-XL");
         assert!(
             matches!(result, Err(crate::error::OperatorError::InvalidInstanceType(t)) if t == "MEGA-XL")
         );
@@ -638,7 +638,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_instance_type_case_sensitive() {
         // Les types sont en majuscules — "dev1-s" doit échouer
-        let result = test_client().validate_instance_type("dev1-s").await;
+        let result = test_client().validate_instance_type("dev1-s");
         assert!(matches!(
             result,
             Err(crate::error::OperatorError::InvalidInstanceType(_))
@@ -1213,13 +1213,13 @@ mod tests {
     #[tokio::test]
     async fn test_validate_lb_type_valid() {
         let client = test_client();
-        assert!(client.validate_lb_type("LB-S").await.is_ok());
-        assert!(client.validate_lb_type("LB-GP").await.is_ok());
+        assert!(client.validate_lb_type("LB-S").is_ok());
+        assert!(client.validate_lb_type("LB-GP").is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_lb_type_invalid() {
-        let result = test_client().validate_lb_type("MEGA-LB").await;
+        let result = test_client().validate_lb_type("MEGA-LB");
         assert!(matches!(
             result,
             Err(OperatorError::InvalidLbType(_))

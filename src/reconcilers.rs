@@ -788,9 +788,7 @@ async fn validate_spec(
     scaleway_client: &ScalewayClient,
 ) -> Result<()> {
     scaleway_client.validate_zone(&spec.zone).await?;
-    scaleway_client
-        .validate_instance_type(&spec.instance_type)
-        .await?;
+    scaleway_client.validate_instance_type(&spec.instance_type)?;
 
     if spec.name.is_empty() {
         return Err(OperatorError::ConfigError(
@@ -931,22 +929,9 @@ async fn reconcile_load_balancer_inner(
                 return Err(e);
             }
 
-            let ns_client = match get_namespace_client(&ctx, &namespace).await {
-                Ok(client) => client,
-                Err(e) => {
-                    tracing::error!(name = %lb.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
-                    let mut st = lb.status.clone().unwrap_or_default();
-                    st.error_message = Some(e.for_status());
-                    st.sync_state = "Error".to_string();
-                    let _ = update_lb_status(&lb, &api, st).await;
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    return Err(e);
-                }
-            };
-
             call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
 
-            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
         }
 
         LbReconcileDecision::CreateLoadBalancer { project_id } => {
@@ -957,20 +942,7 @@ async fn reconcile_load_balancer_inner(
                 return Err(e);
             }
 
-            let ns_client = match get_namespace_client(&ctx, &namespace).await {
-                Ok(client) => client,
-                Err(e) => {
-                    tracing::error!(name = %lb.name_any(), namespace = %namespace, error = %e, "Missing pre-provisioned IAM credentials");
-                    let mut st = lb.status.clone().unwrap_or_default();
-                    st.error_message = Some(e.for_status());
-                    st.sync_state = "Error".to_string();
-                    let _ = update_lb_status(&lb, &api, st).await;
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    return Err(e);
-                }
-            };
-
-            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
         }
 
         LbReconcileDecision::SyncLoadBalancer { scaleway_id, project_id } => {
@@ -1036,12 +1008,9 @@ async fn execute_create_load_balancer(
     api: &Api<LoadBalancer>,
     ctx: &Arc<Context>,
     namespace: &str,
-    ns_client: &ScalewayClient,
     project_id: &str,
     measurer: &mut ReconcileMeasurer<'_>,
 ) -> std::result::Result<Action, OperatorError> {
-    let _ = ns_client; // IAM-scoped client available for future write operations
-
     let mut status = lb.status.clone().unwrap_or_default();
     let cr_name = lb.name_any();
 
@@ -1190,7 +1159,7 @@ async fn update_lb_status(lb: &LoadBalancer, api: &Api<LoadBalancer>, status: Lo
 
 async fn validate_lb_spec(spec: &crate::resources::LoadBalancerSpec, scaleway_client: &ScalewayClient) -> Result<()> {
     scaleway_client.validate_zone(&spec.zone).await?;
-    scaleway_client.validate_lb_type(&spec.lb_type).await?;
+    scaleway_client.validate_lb_type(&spec.lb_type)?;
 
     if spec.name.is_empty() {
         return Err(OperatorError::ConfigError("name cannot be empty".to_string()));
