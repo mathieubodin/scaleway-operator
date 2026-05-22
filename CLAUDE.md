@@ -23,12 +23,20 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 > ⚠️ Toute modification de `src/resources.rs` (CRDs) doit être suivie de `make generate-crds`
 > pour régénérer les manifests dans `k8s/`.
 
-**Tests d'intégration (prérequis) :**
+**Tests d'intégration via kind (cluster éphémère) :**
 
 ```bash
-make deploy-test-fixtures  # une seule fois par cluster (namespaces/NamespaceRoles/Secrets de test)
-make test-integration      # nécessite kubectl proxy sur :8001
+make test-integration-kind  # crée un cluster kind, joue les 12 tests, supprime le cluster
 ```
+
+Le cluster kind `scaleway-operator-test` est créé et supprimé automatiquement. Le fichier
+`.kube/kind-config` est créé temporairement et nettoyé à la fin, même en cas d'échec.
+
+**Prérequis pour `make test-integration-kind` :**
+
+- Docker : disponible et démarré
+- kind : `brew install kind` (macOS) ou `go install sigs.k8s.io/kind@latest` (Linux)
+- helm : `brew install helm`
 
 **Prérequis pour les targets deploy :**
 

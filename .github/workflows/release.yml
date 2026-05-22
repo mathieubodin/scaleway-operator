@@ -30,12 +30,48 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: Build multi-arch + push GHCR + cosign signing
-  # Déclenché UNIQUEMENT quand release-please a créé une release.
+  # Job 2: Tests d'intégration via kind (gate de release)
+  # Tourne sur chaque push main. build-and-push dépend de ce job.
+  # ────────────────────────────────────────────────────────────────────────────
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install kind
+        run: |
+          curl -sSLo /usr/local/bin/kind \
+            "https://github.com/kubernetes-sigs/kind/releases/latest/download/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-integration-
+
+      - name: Set up Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+      - name: Run integration tests
+        run: make test-integration-kind
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 3: Build multi-arch + push GHCR + cosign signing
+  # Déclenché UNIQUEMENT quand release-please a créé une release ET les tests
+  # d'intégration sont verts.
   # ────────────────────────────────────────────────────────────────────────────
   build-and-push:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: [release-please, integration-tests]
+    if: ${{ needs.release-please.outputs.release_created == 'true' && needs.integration-tests.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,7 +200,7 @@ jobs:
           done
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 3: Sync README helm versions
+  # Job 4: Sync README helm versions
   # Met à jour --version X.Y.Z dans README.md après chaque release de chart.
   # Push via GITHUB_TOKEN : GitHub ne re-déclenche pas de workflow run pour les
   # push effectués avec ce token (suppression plateforme, pas de boucle CI).
