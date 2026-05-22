@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-22)
+
+
+### Features
+
+* **reconcilers:** add LoadBalancer reconciler with create/sync/delete lifecycle ([#33](https://github.com/mathieubodin/scaleway-operator/issues/33)) ([a6c78d2](https://github.com/mathieubodin/scaleway-operator/commit/a6c78d288b2f692b759c5d8eda75888de7a71434))
+
+
+### Refactoring
+
+* **reconcilers:** extract pure decision layer with decide_next_action ([#29](https://github.com/mathieubodin/scaleway-operator/issues/29)) ([e55ef90](https://github.com/mathieubodin/scaleway-operator/commit/e55ef908967d3291d287274db26f5775fcc15cfc))
+
+
+### Documentation
+
+* **claude:** update CLAUDE.md with missing make targets and integration test instructions ([0b4fcda](https://github.com/mathieubodin/scaleway-operator/commit/0b4fcda9c48546280553b7ab084ce99ef648253f))
+* remove spurious blank lines in changelogs and docs ([15fa3ab](https://github.com/mathieubodin/scaleway-operator/commit/15fa3ab6589f2ae5b171e94574a48bf2bd5fdf80))
+* **solutions:** clarify release-please extra-files doc is preventative guidance ([ccdfbc8](https://github.com/mathieubodin/scaleway-operator/commit/ccdfbc8f69352830149cb6887d3c23dbee2d7201))
+
 ## [0.1.8](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.7...scaleway-operator-v0.1.8) (2026-05-14)
 
 ### Features
