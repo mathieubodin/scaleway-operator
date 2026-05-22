@@ -102,6 +102,79 @@ impl Default for InstanceStatus {
     }
 }
 
+// ============== LoadBalancer Resource ==============
+
+#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "LoadBalancer")]
+#[kube(namespaced)]
+#[kube(status = "LoadBalancerStatus")]
+#[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scalewayId"}"#)]
+#[kube(printcolumn = r#"{"name":"State","type":"string","jsonPath":".status.state"}"#)]
+#[kube(printcolumn = r#"{"name":"VIP","type":"string","jsonPath":".status.vipAddress"}"#)]
+pub struct LoadBalancerSpec {
+    /// Nom du load balancer Scaleway
+    pub name: String,
+
+    /// Zone Scaleway (fr-par-1, nl-ams-1, etc.)
+    pub zone: String,
+
+    /// Type de load balancer (LB-S, LB-GP, etc.)
+    pub lb_type: String,
+
+    /// Description optionnelle
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Tags optionnels
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct LoadBalancerStatus {
+    /// ID Scaleway du load balancer
+    #[serde(default)]
+    pub scaleway_id: Option<String>,
+
+    /// Adresse VIP (IP publique du LB)
+    #[serde(default)]
+    pub vip_address: Option<String>,
+
+    /// État actuel (pending, ready, error, etc.)
+    #[serde(default)]
+    pub state: String,
+
+    /// ID du projet Scaleway (pour tracking)
+    #[serde(default)]
+    pub project_id: Option<String>,
+
+    /// Timestamp de création
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+
+    /// Message d'erreur si applicable
+    #[serde(default)]
+    pub error_message: Option<String>,
+
+    /// État de la synchronisation (Pending, Synced, Syncing, Error, TerminationBlocked, etc.)
+    #[serde(default)]
+    pub sync_state: String,
+}
+
+impl Default for LoadBalancerStatus {
+    fn default() -> Self {
+        Self {
+            scaleway_id: None,
+            vip_address: None,
+            state: String::new(),
+            project_id: None,
+            created_at: None,
+            error_message: None,
+            sync_state: "Pending".to_string(),
+        }
+    }
+}
+
 // ============== NamespaceRole Resource (Cluster-wide) ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -154,6 +227,44 @@ impl Default for NamespaceRoleStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_load_balancer_status_default_values() {
+        let status = LoadBalancerStatus::default();
+        assert_eq!(status.scaleway_id, None);
+        assert_eq!(status.vip_address, None);
+        assert_eq!(status.state, "");
+        assert_eq!(status.project_id, None);
+        assert_eq!(status.created_at, None);
+        assert_eq!(status.error_message, None);
+        assert_eq!(status.sync_state, "Pending");
+    }
+
+    #[test]
+    fn test_load_balancer_status_serde_round_trip() {
+        let status = LoadBalancerStatus {
+            scaleway_id: Some("lb-abc123".to_string()),
+            vip_address: Some("1.2.3.4".to_string()),
+            state: "ready".to_string(),
+            project_id: Some("proj-xyz".to_string()),
+            created_at: None,
+            error_message: None,
+            sync_state: "Synced".to_string(),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let decoded: LoadBalancerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, decoded);
+    }
+
+    #[test]
+    fn test_load_balancer_status_missing_optional_fields_deserializes() {
+        let json = r#"{"state":"pending","sync_state":"Pending"}"#;
+        let status: LoadBalancerStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.scaleway_id, None);
+        assert_eq!(status.vip_address, None);
+        assert_eq!(status.state, "pending");
+        assert_eq!(status.sync_state, "Pending");
+    }
 
     #[test]
     fn test_instance_status_default_values() {

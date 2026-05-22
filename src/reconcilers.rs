@@ -2,7 +2,7 @@ use crate::context::Context;
 use crate::context::{extract_project_id_from_namespace, get_scaleway_role_for_namespace};
 use crate::error::{OperatorError, Result};
 use crate::metrics::{OperatorMetrics, ReconcileOutcome};
-use crate::resources::{Instance, InstanceStatus};
+use crate::resources::{Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus};
 use crate::scaleway::ScalewayClient;
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Secret;
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
+const LB_FINALIZER: &str = "scaleway.mathieubodin.io/loadbalancer-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 // ── ReconcileMeasurer — RAII timer that records duration + outcome ────────────
@@ -147,6 +148,74 @@ fn role_allows_write(role: &str) -> bool {
     matches!(role, "Editor" | "Admin" | "OrganizationOwner")
 }
 
+// ── LbReconcileInput / LbReconcileDecision — couche de décision pure LoadBalancer ──
+
+struct LbReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    scaleway_role: String,
+    project_id: String,
+    scaleway_id: Option<String>,
+    status_project_id: Option<String>,
+}
+
+enum LbReconcileDecision {
+    SkipCircuitOpen,
+    AddLbFinalizer,
+    BlockReadOnlyRole,
+    VerifyProjectAccessLb { project_id: String },
+    CreateLoadBalancer { project_id: String },
+    SyncLoadBalancer { scaleway_id: String, project_id: String },
+    DeleteLoadBalancer { scaleway_id: String },
+    RemoveLbFinalizer,
+}
+
+fn decide_next_action_lb(input: &LbReconcileInput) -> LbReconcileDecision {
+    // 1. Suppression prioritaire — avant toute autre vérification
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(id) => LbReconcileDecision::DeleteLoadBalancer { scaleway_id: id.clone() },
+            None => LbReconcileDecision::RemoveLbFinalizer,
+        };
+    }
+
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return LbReconcileDecision::SkipCircuitOpen;
+    }
+
+    // 3. Finalizer absent — l'ajouter avant tout
+    if !input.finalizer_present {
+        return LbReconcileDecision::AddLbFinalizer;
+    }
+
+    // 4. LB déjà connu — synchroniser
+    if let Some(scaleway_id) = &input.scaleway_id {
+        return LbReconcileDecision::SyncLoadBalancer {
+            scaleway_id: scaleway_id.clone(),
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 5. Création — vérifier le rôle
+    if !role_allows_write(&input.scaleway_role) {
+        return LbReconcileDecision::BlockReadOnlyRole;
+    }
+
+    // 6. Vérification accès projet seulement à la première création
+    if input.status_project_id.is_none() {
+        return LbReconcileDecision::VerifyProjectAccessLb {
+            project_id: input.project_id.clone(),
+        };
+    }
+
+    // 7. Accès projet déjà validé — créer directement
+    LbReconcileDecision::CreateLoadBalancer {
+        project_id: input.project_id.clone(),
+    }
+}
+
 /// Lit les credentials IAM pré-provisionnés pour ce namespace depuis un Secret Kubernetes.
 ///
 /// Convention : Secret `scaleway-ns-creds-{namespace}` dans `scaleway-system`,
@@ -186,9 +255,12 @@ async fn get_namespace_client(ctx: &Arc<Context>, namespace: &str) -> Result<Sca
     ))
 }
 
-/// Récupérer le project_id depuis l'annotation du namespace
-async fn get_project_id_from_namespace(instance: &Instance, ctx: &Arc<Context>) -> Result<String> {
-    let namespace = instance.namespace().unwrap_or_default();
+/// Récupérer le project_id depuis l'annotation du namespace pour n'importe quelle ressource.
+async fn get_project_id_from_namespace_resource(
+    resource: &impl kube::ResourceExt,
+    ctx: &Arc<Context>,
+) -> Result<String> {
+    let namespace = resource.namespace().unwrap_or_default();
     let api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(ctx.client.clone());
 
     let ns = api.get(&namespace).await.map_err(|e| {
@@ -215,7 +287,7 @@ pub async fn reconcile_instance(
     ctx: Arc<Context>,
 ) -> std::result::Result<Action, OperatorError> {
     let key = format!(
-        "{}/{}",
+        "instance/{}/{}",
         instance.namespace().unwrap_or_default(),
         instance.name_any()
     );
@@ -270,7 +342,7 @@ async fn reconcile_instance_inner(
         };
 
         // Obtenir le project_id depuis l'annotation du namespace
-        let pid = match get_project_id_from_namespace(&instance, &ctx).await {
+        let pid = match get_project_id_from_namespace_resource(instance.as_ref(), &ctx).await {
             Ok(pid) => {
                 // Valider le format UUID pour prévenir toute injection dans les URLs Scaleway
                 if uuid::Uuid::parse_str(&pid).is_err() {
@@ -716,14 +788,381 @@ async fn validate_spec(
     scaleway_client: &ScalewayClient,
 ) -> Result<()> {
     scaleway_client.validate_zone(&spec.zone).await?;
-    scaleway_client
-        .validate_instance_type(&spec.instance_type)
-        .await?;
+    scaleway_client.validate_instance_type(&spec.instance_type)?;
 
     if spec.name.is_empty() {
         return Err(OperatorError::ConfigError(
             "name cannot be empty".to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+// ── LoadBalancer reconciler ───────────────────────────────────────────────────
+
+pub async fn reconcile_load_balancer(
+    lb: Arc<LoadBalancer>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "loadbalancer/{}/{}",
+        lb.namespace().unwrap_or_default(),
+        lb.name_any()
+    );
+    let result = reconcile_load_balancer_inner(lb, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_load_balancer_inner(
+    lb: Arc<LoadBalancer>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let namespace = lb.namespace().unwrap_or_default();
+    let api: Api<LoadBalancer> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    tracing::info!(
+        name = %lb.name_any(),
+        namespace = %namespace,
+        "Reconciling load balancer"
+    );
+
+    let deletion_requested = lb.metadata.deletion_timestamp.is_some();
+    let circuit_open = ctx.is_circuit_open();
+    let finalizer_present = lb
+        .metadata
+        .finalizers
+        .as_ref()
+        .unwrap_or(&vec![])
+        .contains(&LB_FINALIZER.to_string());
+
+    let (scaleway_role, project_id) = if !deletion_requested && !circuit_open {
+        let role = match get_scaleway_role_for_namespace(&ctx.client, &namespace).await {
+            Ok(role) => role,
+            Err(e) => {
+                tracing::error!(name = %lb.name_any(), namespace = %namespace, error = %e, "Cannot proceed without NamespaceRole");
+                let mut status = lb.status.clone().unwrap_or_default();
+                status.error_message = Some(e.for_status());
+                status.sync_state = "Error".to_string();
+                let _ = update_lb_status(&lb, &api, status).await;
+                return Err(e);
+            }
+        };
+
+        let pid = match get_project_id_from_namespace_resource(lb.as_ref(), &ctx).await {
+            Ok(pid) => {
+                if uuid::Uuid::parse_str(&pid).is_err() {
+                    let e = OperatorError::ConfigError(format!(
+                        "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
+                        pid
+                    ));
+                    let mut status = lb.status.clone().unwrap_or_default();
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_lb_status(&lb, &api, status).await;
+                    return Err(e);
+                }
+                pid
+            }
+            Err(e) => {
+                tracing::error!(name = %lb.name_any(), error = %e, "Cannot proceed without project_id from namespace annotation");
+                let mut status = lb.status.clone().unwrap_or_default();
+                status.error_message = Some(e.for_status());
+                status.sync_state = "Error".to_string();
+                let _ = update_lb_status(&lb, &api, status).await;
+                return Err(e);
+            }
+        };
+
+        (role, pid)
+    } else {
+        (String::new(), String::new())
+    };
+
+    let current_status = lb.status.clone().unwrap_or_default();
+
+    let input = LbReconcileInput {
+        deletion_requested,
+        circuit_open,
+        finalizer_present,
+        scaleway_role: scaleway_role.clone(),
+        project_id: project_id.clone(),
+        scaleway_id: current_status.scaleway_id.clone(),
+        status_project_id: current_status.project_id.clone(),
+    };
+
+    let decision = decide_next_action_lb(&input);
+
+    match decision {
+        LbReconcileDecision::SkipCircuitOpen => {
+            tracing::warn!(name = %lb.name_any(), namespace = %namespace, "Scaleway API circuit breaker is open — skipping LB reconciliation");
+            Err(OperatorError::CircuitBreakerOpen)
+        }
+
+        LbReconcileDecision::AddLbFinalizer => {
+            add_lb_finalizer(&lb, &api).await?;
+            Ok(Action::requeue(Duration::from_secs(5)))
+        }
+
+        LbReconcileDecision::BlockReadOnlyRole => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let e = OperatorError::ConfigError(format!(
+                "Role '{}' is read-only and cannot create load balancers. Use 'Editor' or 'Admin'.",
+                input.scaleway_role
+            ));
+            let mut status = lb.status.clone().unwrap_or_default();
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_lb_status(&lb, &api, status).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
+            Err(e)
+        }
+
+        LbReconcileDecision::VerifyProjectAccessLb { project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            if let Err(e) = validate_lb_spec(&lb.spec, &ctx.scaleway_client).await {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                return Err(e);
+            }
+
+            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
+
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
+        }
+
+        LbReconcileDecision::CreateLoadBalancer { project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            if let Err(e) = validate_lb_spec(&lb.spec, &ctx.scaleway_client).await {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                return Err(e);
+            }
+
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
+        }
+
+        LbReconcileDecision::SyncLoadBalancer { scaleway_id, project_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            // GET uses the global operator token (read-only scope).
+            // TODO: migrate to ns_client when the namespace IAM key covers read operations.
+
+            let mut status = lb.status.clone().unwrap_or_default();
+
+            match call_scaleway(&ctx, || ctx.scaleway_client.get_load_balancer(&lb.spec.zone, &scaleway_id)).await {
+                Ok(info) => {
+                    let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("").to_string();
+                    ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &old_state);
+                    ctx.metrics.inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &info.state);
+
+                    status.state = info.state;
+                    status.vip_address = info.vip_address;
+                    status.project_id = Some(project_id);
+                    status.sync_state = "Synced".to_string();
+                    status.error_message = None;
+                    measurer.set_outcome(ReconcileOutcome::Synced);
+                    update_lb_status(&lb, &api, status).await?;
+                }
+                Err(OperatorError::LbNotFound(_)) => {
+                    tracing::warn!(name = %lb.name_any(), "Load balancer not found in Scaleway — will recreate");
+                    if lb.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
+                        let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("");
+                        ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
+                    }
+                    status.scaleway_id = None;
+                    status.state = String::new();
+                    status.vip_address = None;
+                    status.project_id = None;
+                    status.error_message = None;
+                    status.sync_state = "Pending".to_string();
+                    if let Err(patch_err) = update_lb_status(&lb, &api, status).await {
+                        tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after LbNotFound");
+                    }
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Ok(Action::requeue(Duration::from_secs(30)));
+                }
+                Err(e) => {
+                    tracing::warn!(name = %lb.name_any(), error = %e, "Failed to sync load balancer status");
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    update_lb_status(&lb, &api, status).await?;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            }
+
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        LbReconcileDecision::DeleteLoadBalancer { .. } | LbReconcileDecision::RemoveLbFinalizer => {
+            handle_lb_deletion(&lb, &api, &ctx).await
+        }
+    }
+}
+
+async fn execute_create_load_balancer(
+    lb: &LoadBalancer,
+    api: &Api<LoadBalancer>,
+    ctx: &Arc<Context>,
+    namespace: &str,
+    project_id: &str,
+    measurer: &mut ReconcileMeasurer<'_>,
+) -> std::result::Result<Action, OperatorError> {
+    let mut status = lb.status.clone().unwrap_or_default();
+    let cr_name = lb.name_any();
+
+    // Orphan adoption via tag-based lookup (name is not unique in Scaleway LB API)
+    let (lb_id, adopted) = match call_scaleway(ctx, || {
+        ctx.scaleway_client.find_load_balancer_by_name(&lb.spec.zone, namespace, &cr_name, project_id)
+    }).await? {
+        Some(existing_id) => {
+            tracing::warn!(
+                name = %lb.name_any(),
+                scaleway_id = %existing_id,
+                "Adopted existing Scaleway load balancer (status write may have failed previously)"
+            );
+            (existing_id, true)
+        }
+        None => {
+            tracing::info!(name = %lb.name_any(), project_id = %project_id, "Creating new Scaleway load balancer");
+            match call_scaleway(ctx, || {
+                ctx.scaleway_client.create_load_balancer(&lb.spec, project_id, namespace, &cr_name)
+            }).await {
+                Ok(id) => (id, false),
+                Err(e) => {
+                    tracing::error!(name = %lb.name_any(), error = %e, "Failed to create load balancer");
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    update_lb_status(lb, api, status).await?;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            }
+        }
+    };
+
+    status.scaleway_id = Some(lb_id);
+    status.state = "pending".to_string();
+    status.sync_state = "Syncing".to_string();
+    status.error_message = None;
+    status.project_id = Some(project_id.to_string());
+
+    ctx.metrics.inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, "pending");
+
+    if adopted {
+        measurer.set_outcome(ReconcileOutcome::Adopted);
+    } else {
+        measurer.set_outcome(ReconcileOutcome::Created);
+    }
+    update_lb_status(lb, api, status).await?;
+    Ok(Action::requeue(Duration::from_secs(10)))
+}
+
+async fn handle_lb_deletion(
+    lb: &LoadBalancer,
+    api: &Api<LoadBalancer>,
+    ctx: &Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+    tracing::info!(name = %lb.name_any(), "Deleting load balancer");
+
+    if let Some(status) = &lb.status {
+        if let Some(lb_id) = &status.scaleway_id {
+            let namespace = lb.namespace().unwrap_or_default();
+            match get_namespace_client(ctx, &namespace).await {
+                Ok(_ns_client) => {
+                    match call_scaleway(ctx, || ctx.scaleway_client.delete_load_balancer(&lb.spec.zone, lb_id, true)).await {
+                        Ok(_) => {
+                            tracing::info!(name = %lb.name_any(), lb_id = %lb_id, "Successfully deleted Scaleway load balancer");
+                        }
+                        Err(OperatorError::ScalewayError { ref status, .. }) if status.contains("409") || status.contains("423") => {
+                            tracing::warn!(name = %lb.name_any(), lb_id = %lb_id, "Load balancer is locked — cannot delete yet");
+                            let mut st = lb.status.clone().unwrap_or_default();
+                            st.sync_state = "TerminationBlocked".to_string();
+                            st.error_message = Some("Load balancer is locked — deletion blocked by Scaleway".to_string());
+                            let _ = update_lb_status(lb, api, st).await;
+                            measurer.set_outcome(ReconcileOutcome::Error);
+                            return Err(OperatorError::ScalewayError {
+                                status: "409".to_string(),
+                                message: "Load balancer is locked".to_string(),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!(name = %lb.name_any(), error = %e, "Failed to delete Scaleway load balancer");
+                            measurer.set_outcome(ReconcileOutcome::Error);
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    // IAM Secret absent — write audit trail before removing finalizer
+                    tracing::warn!(
+                        name = %lb.name_any(),
+                        lb_id = %lb_id,
+                        error = %e,
+                        "IAM Secret missing during LB deletion — skipping Scaleway API call"
+                    );
+                    let mut st = lb.status.clone().unwrap_or_default();
+                    st.sync_state = "FinalizerRemovedWithoutScalewayDelete".to_string();
+                    st.error_message = Some(
+                        "IAM Secret missing at deletion time — Scaleway LB may still exist".to_string(),
+                    );
+                    if let Err(patch_err) = update_lb_status(lb, api, st).await {
+                        tracing::error!(
+                            name = %lb.name_any(),
+                            lb_id = %lb_id,
+                            error = %patch_err,
+                            "Failed to write FinalizerRemovedWithoutScalewayDelete audit status — potential LB orphan in Scaleway"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove finalizer
+    let finalizers = lb.metadata.finalizers.clone().unwrap_or_default();
+    let new_finalizers: Vec<String> = finalizers.into_iter().filter(|f| f != LB_FINALIZER).collect();
+
+    let patch = serde_json::json!({"metadata": {"finalizers": new_finalizers}});
+    api.patch(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch))
+        .await
+        .map_err(|e| {
+            measurer.set_outcome(ReconcileOutcome::Error);
+            OperatorError::KubeError(e)
+        })?;
+
+    let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("");
+    ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
+
+    measurer.set_outcome(ReconcileOutcome::Deleted);
+    Ok(Action::await_change())
+}
+
+async fn add_lb_finalizer(lb: &LoadBalancer, api: &Api<LoadBalancer>) -> Result<()> {
+    let mut finalizers = lb.metadata.finalizers.clone().unwrap_or_default();
+    finalizers.push(LB_FINALIZER.to_string());
+    let patch = serde_json::json!({"metadata": {"finalizers": finalizers}});
+    api.patch(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch)).await?;
+    Ok(())
+}
+
+async fn update_lb_status(lb: &LoadBalancer, api: &Api<LoadBalancer>, status: LoadBalancerStatus) -> Result<()> {
+    let patch = serde_json::json!({"status": status});
+    api.patch_status(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch)).await?;
+    Ok(())
+}
+
+async fn validate_lb_spec(spec: &crate::resources::LoadBalancerSpec, scaleway_client: &ScalewayClient) -> Result<()> {
+    scaleway_client.validate_zone(&spec.zone).await?;
+    scaleway_client.validate_lb_type(&spec.lb_type)?;
+
+    if spec.name.is_empty() {
+        return Err(OperatorError::ConfigError("name cannot be empty".to_string()));
     }
 
     Ok(())
@@ -736,6 +1175,7 @@ fn is_permanent_error(error: &OperatorError) -> bool {
         error,
         OperatorError::InvalidZone(_)
             | OperatorError::InvalidInstanceType(_)
+            | OperatorError::InvalidLbType(_)
             | OperatorError::ConfigError(_)
             | OperatorError::ProjectAccessDenied(_)
     )
@@ -744,36 +1184,32 @@ fn is_permanent_error(error: &OperatorError) -> bool {
     // all transient by exhaustive exclusion
 }
 
-pub fn error_policy(instance: Arc<Instance>, error: &OperatorError, ctx: Arc<Context>) -> Action {
-    ctx.metrics.record_error(error);
+fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
     if is_permanent_error(error) {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
-        let key = format!(
-            "{}/{}",
-            instance.namespace().unwrap_or_default(),
-            instance.name_any()
-        );
         let attempts = ctx.increment_retry_count(&key);
         // Backoff exponentiel : 30s, 60s, 120s, 240s, 300s (max)
         let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
         if matches!(error, OperatorError::CircuitBreakerOpen) {
-            tracing::warn!(
-                attempts = attempts,
-                retry_in_secs = delay_secs,
-                "Scaleway API circuit breaker open — backing off"
-            );
+            tracing::warn!(attempts = attempts, retry_in_secs = delay_secs, "Scaleway API circuit breaker open — backing off");
         } else {
-            tracing::error!(
-                error = %error,
-                attempts = attempts,
-                retry_in_secs = delay_secs,
-                "Transient reconciliation error"
-            );
+            tracing::error!(error = %error, attempts = attempts, retry_in_secs = delay_secs, "Transient reconciliation error");
         }
         Action::requeue(Duration::from_secs(delay_secs))
     }
+}
+
+pub fn error_policy<R: kube::ResourceExt>(
+    kind: &'static str,
+    resource: Arc<R>,
+    error: &OperatorError,
+    ctx: Arc<Context>,
+) -> Action {
+    ctx.metrics.record_error(error);
+    let key = format!("{}/{}/{}", kind, resource.namespace().unwrap_or_default(), resource.name_any());
+    error_policy_inner(key, error, &ctx)
 }
 
 #[cfg(test)]
@@ -886,6 +1322,122 @@ mod tests {
     #[test]
     fn test_unknown_role_does_not_allow_write() {
         assert!(!role_allows_write("UnknownRole"));
+    }
+
+    // ── decide_next_action_lb unit tests ───────────────────────────────────────
+
+    fn base_lb_input() -> LbReconcileInput {
+        LbReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            scaleway_role: "Editor".to_string(),
+            project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            scaleway_id: None,
+            status_project_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_lb_decide_default_base_returns_create() {
+        let input = base_lb_input();
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::CreateLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_finalizer_absent_returns_add_finalizer() {
+        let input = LbReconcileInput { finalizer_present: false, ..base_lb_input() };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::AddLbFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_circuit_open_returns_skip() {
+        let input = LbReconcileInput { circuit_open: true, ..base_lb_input() };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::SkipCircuitOpen
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_scaleway_id_present_returns_sync() {
+        let input = LbReconcileInput {
+            scaleway_id: Some("lb-abc".to_string()),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::SyncLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_deletion_with_scaleway_id_returns_delete() {
+        let input = LbReconcileInput {
+            deletion_requested: true,
+            scaleway_id: Some("lb-abc".to_string()),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::DeleteLoadBalancer { .. }
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_deletion_without_scaleway_id_returns_remove_finalizer() {
+        let input = LbReconcileInput {
+            deletion_requested: true,
+            scaleway_id: None,
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::RemoveLbFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_viewer_role_returns_block() {
+        let input = LbReconcileInput {
+            scaleway_role: "Viewer".to_string(),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::BlockReadOnlyRole
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_no_status_project_id_returns_verify() {
+        let input = LbReconcileInput {
+            status_project_id: None,
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::VerifyProjectAccessLb { .. }
+        ));
+    }
+
+    // --- retry_counts key format ---
+
+    #[test]
+    fn test_retry_key_instance_has_kind_prefix() {
+        // Vérifie que le format "instance/{ns}/{name}" n'entre pas en collision
+        // avec "loadbalancer/{ns}/{name}" pour des ressources homonymes.
+        let instance_key = format!("instance/{}/{}", "production", "web");
+        let lb_key = format!("loadbalancer/{}/{}", "production", "web");
+        assert_ne!(instance_key, lb_key, "instance and LB keys must not collide");
+        assert!(instance_key.starts_with("instance/"));
+        assert!(lb_key.starts_with("loadbalancer/"));
     }
 
     // --- is_permanent_error / error_policy classification ---
@@ -1153,7 +1705,7 @@ mod tests {
     async fn test_error_policy_increments_config_error_counter() {
         let ctx = make_test_context();
         let err = OperatorError::ConfigError("bad annotation".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
@@ -1174,7 +1726,7 @@ mod tests {
     async fn test_error_policy_increments_unknown_error_counter() {
         let ctx = make_test_context();
         let err = OperatorError::Unknown("mystery".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
@@ -1188,13 +1740,98 @@ mod tests {
     async fn test_error_policy_counter_accumulates() {
         let ctx = make_test_context();
         let err = OperatorError::ConfigError("x".to_string());
-        error_policy(dummy_instance(), &err, ctx.clone());
-        error_policy(dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
         let value = ctx
             .metrics
             .reconcile_errors_total
             .with_label_values(&["ConfigError"])
             .get();
         assert_eq!(value, 2);
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_permanent_error_returns_await_change() {
+        let ctx = make_test_context();
+        for err in [
+            OperatorError::InvalidZone("bad".to_string()),
+            OperatorError::InvalidInstanceType("bad".to_string()),
+            OperatorError::InvalidLbType("bad".to_string()),
+            OperatorError::ConfigError("bad".to_string()),
+            OperatorError::ProjectAccessDenied("bad".to_string()),
+        ] {
+            let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+            assert_eq!(action, Action::await_change(), "expected await_change for {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_transient_error_returns_requeue_with_backoff() {
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+
+        // 1re tentative → 30s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(30)));
+
+        // 2e tentative → 60s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(60)));
+
+        // 3e tentative → 120s
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        assert_eq!(action, Action::requeue(Duration::from_secs(120)));
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_circuit_breaker_returns_requeue() {
+        let ctx = make_test_context();
+        let err = OperatorError::CircuitBreakerOpen;
+        let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        // CircuitBreakerOpen est transitoire : requeue (pas await_change)
+        assert!(matches!(action, Action { .. }));
+        assert_ne!(action, Action::await_change());
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_backoff_caps_at_300s() {
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+        // 10 tentatives atteignent le plafond de 300s
+        let mut last = Action::requeue(Duration::from_secs(0));
+        for _ in 0..10 {
+            last = error_policy("instance", dummy_instance(), &err, ctx.clone());
+        }
+        assert_eq!(last, Action::requeue(Duration::from_secs(300)));
+    }
+
+    #[tokio::test]
+    async fn test_error_policy_loadbalancer_kind_uses_separate_retry_counter() {
+        use crate::resources::{LoadBalancer, LoadBalancerSpec};
+        let ctx = make_test_context();
+        let err = OperatorError::Unknown("transient".to_string());
+
+        let lb = Arc::new(LoadBalancer {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: LoadBalancerSpec {
+                name: "test".to_string(),
+                zone: "fr-par-1".to_string(),
+                lb_type: "LB-S".to_string(),
+                description: None,
+                tags: vec![],
+            },
+            status: None,
+        });
+
+        // Instance et LB partagent le même namespace/name mais des compteurs distincts
+        error_policy("instance", dummy_instance(), &err, ctx.clone());
+        let lb_action = error_policy("loadbalancer", lb, &err, ctx.clone());
+
+        // Le LB est à la 1re tentative (30s), pas à la 2e (60s)
+        assert_eq!(lb_action, Action::requeue(Duration::from_secs(30)));
     }
 }

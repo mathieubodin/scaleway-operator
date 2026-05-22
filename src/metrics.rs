@@ -40,6 +40,7 @@ pub struct OperatorMetrics {
     pub(crate) reconcile_errors_total: IntCounterVec,
     pub(crate) reconcile_duration_seconds: HistogramVec,
     pub(crate) instances_total: GaugeVec,
+    pub(crate) load_balancers_total: GaugeVec,
 }
 
 impl OperatorMetrics {
@@ -75,10 +76,18 @@ impl OperatorMetrics {
         let instances_total = GaugeVec::new(instances_opts, &["zone", "instance_type", "state"])?;
         registry.register(Box::new(instances_total.clone()))?;
 
+        let lb_opts = Opts::new(
+            "scaleway_operator_load_balancers_total",
+            "Number of Scaleway load balancers currently managed by the operator, by zone, type and state",
+        );
+        let load_balancers_total = GaugeVec::new(lb_opts, &["zone", "lb_type", "state"])?;
+        registry.register(Box::new(load_balancers_total.clone()))?;
+
         Ok(Self {
             reconcile_errors_total,
             reconcile_duration_seconds,
             instances_total,
+            load_balancers_total,
         })
     }
 
@@ -112,6 +121,20 @@ impl OperatorMetrics {
             .with_label_values(&[zone, instance_type, state])
             .dec();
     }
+
+    /// Increment the load balancers gauge for a (zone, lb_type, state) tuple.
+    pub fn inc_load_balancers(&self, zone: &str, lb_type: &str, state: &str) {
+        self.load_balancers_total
+            .with_label_values(&[zone, lb_type, state])
+            .inc();
+    }
+
+    /// Decrement the load balancers gauge for a (zone, lb_type, state) tuple.
+    pub fn dec_load_balancers(&self, zone: &str, lb_type: &str, state: &str) {
+        self.load_balancers_total
+            .with_label_values(&[zone, lb_type, state])
+            .dec();
+    }
 }
 
 #[cfg(test)]
@@ -133,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_registers_three_metrics() {
+    fn test_new_registers_four_metrics() {
         // prometheus::Registry::gather() prunes empty MetricFamilies (no label values touched yet),
         // so we verify registration via the Collector descriptors instead.
         let registry = fresh_registry();
@@ -142,7 +165,8 @@ mod tests {
         use prometheus::core::Collector;
         let counter_descs = metrics.reconcile_errors_total.desc();
         let histogram_descs = metrics.reconcile_duration_seconds.desc();
-        let gauge_descs = metrics.instances_total.desc();
+        let instance_gauge_descs = metrics.instances_total.desc();
+        let lb_gauge_descs = metrics.load_balancers_total.desc();
 
         assert_eq!(counter_descs.len(), 1);
         assert_eq!(
@@ -154,10 +178,15 @@ mod tests {
             histogram_descs[0].fq_name,
             "scaleway_operator_reconcile_duration_seconds"
         );
-        assert_eq!(gauge_descs.len(), 1);
+        assert_eq!(instance_gauge_descs.len(), 1);
         assert_eq!(
-            gauge_descs[0].fq_name,
+            instance_gauge_descs[0].fq_name,
             "scaleway_operator_instances_total"
+        );
+        assert_eq!(lb_gauge_descs.len(), 1);
+        assert_eq!(
+            lb_gauge_descs[0].fq_name,
+            "scaleway_operator_load_balancers_total"
         );
     }
 
@@ -209,6 +238,38 @@ mod tests {
         assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "running"), 1.0);
         assert_eq!(gauge_value(&metrics, "nl-ams-1", "GP1-M", "stopped"), 1.0);
         assert_eq!(gauge_value(&metrics, "fr-par-1", "DEV1-S", "stopped"), 0.0);
+    }
+
+    fn lb_gauge_value(metrics: &OperatorMetrics, zone: &str, lb_type: &str, state: &str) -> f64 {
+        metrics
+            .load_balancers_total
+            .with_label_values(&[zone, lb_type, state])
+            .get()
+    }
+
+    #[test]
+    fn test_inc_load_balancers_increments_to_one() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_load_balancers("fr-par-1", "LB-S", "ready");
+        assert_eq!(lb_gauge_value(&metrics, "fr-par-1", "LB-S", "ready"), 1.0);
+    }
+
+    #[test]
+    fn test_dec_load_balancers_after_inc_reaches_zero() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_load_balancers("fr-par-1", "LB-S", "ready");
+        metrics.dec_load_balancers("fr-par-1", "LB-S", "ready");
+        assert_eq!(lb_gauge_value(&metrics, "fr-par-1", "LB-S", "ready"), 0.0);
+    }
+
+    #[test]
+    fn test_lb_gauge_is_label_scoped() {
+        let metrics = OperatorMetrics::new(&fresh_registry()).unwrap();
+        metrics.inc_load_balancers("fr-par-1", "LB-S", "ready");
+        metrics.inc_load_balancers("nl-ams-1", "LB-GP", "pending");
+        assert_eq!(lb_gauge_value(&metrics, "fr-par-1", "LB-S", "ready"), 1.0);
+        assert_eq!(lb_gauge_value(&metrics, "nl-ams-1", "LB-GP", "pending"), 1.0);
+        assert_eq!(lb_gauge_value(&metrics, "fr-par-1", "LB-S", "pending"), 0.0);
     }
 
     // ── ReconcileOutcome Display produces non-empty strings without spaces ───────
