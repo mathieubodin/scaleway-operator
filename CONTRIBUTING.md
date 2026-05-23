@@ -19,11 +19,14 @@ Vérifier : `rustc --version` (>= 1.80 requis — kube 3.x + schemars 1.x)
 
 ```bash
 # macOS
-brew install kind helm
+brew install kind helm kubectl
+npm install -g markdownlint-cli2
 
 # Linux
 go install sigs.k8s.io/kind@latest
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# kubectl : https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+npm install -g markdownlint-cli2
 ```
 
 Docker doit être disponible et démarré.
@@ -59,7 +62,13 @@ Les tests vérifient `reconcile_instance` contre un vrai API server Kubernetes, 
 make test-integration-kind
 ```
 
-Le cluster kind `scaleway-operator-test` est créé et supprimé automatiquement (`trap EXIT`). Le fichier `.kube/kind-config` est nettoyé à la fin, même en cas d'échec.
+Le script `scripts/test-integration-kind.sh` orchestre le cycle complet :
+
+1. Crée le cluster kind et écrit le kubeconfig dans `.kube/kind-config`
+2. Déploie les CRDs via `helm upgrade`
+3. Applique `k8s/test-fixtures.yaml` via `kubectl`
+4. Exporte `KUBECONFIG=.kube/kind-config` puis lance `cargo test` — c'est ce que `Client::try_default()` lit pour se connecter au cluster kind
+5. Supprime le cluster (`trap EXIT`) et nettoie `.kube/kind-config`, même en cas d'échec
 
 #### Architecture des fixtures
 
