@@ -34,6 +34,7 @@ Le cluster kind `scaleway-operator-test` est créé et supprimé automatiquement
 
 **Prérequis pour `make test-integration-kind` :**
 
+- Rust : `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (ou `brew install rust`)
 - Docker : disponible et démarré
 - kind : `brew install kind` (macOS) ou `go install sigs.k8s.io/kind@latest` (Linux)
 - helm : `brew install helm`
