@@ -23,45 +23,7 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 > ⚠️ Toute modification de `src/resources.rs` (CRDs) doit être suivie de `make generate-crds`
 > pour régénérer les manifests dans `k8s/`.
 
-**Tests d'intégration via kind (cluster éphémère) :**
-
-```bash
-make test-integration-kind  # crée un cluster kind, joue les 12 tests, supprime le cluster
-```
-
-Le cluster kind `scaleway-operator-test` est créé et supprimé automatiquement. Le fichier
-`.kube/kind-config` est créé temporairement et nettoyé à la fin, même en cas d'échec.
-
-**Prérequis pour `make test-integration-kind` :**
-
-- Rust : `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (ou `brew install rust`)
-- Docker : disponible et démarré
-- kind : `brew install kind` (macOS) ou `go install sigs.k8s.io/kind@latest` (Linux)
-- helm : `brew install helm`
-
-**Prérequis pour les targets deploy :**
-
-- Kubeconfig : préférer `KUBECONFIG=~/.kube/config make deploy-crds` (standard).
-  `.kube/config` à la racine du repo fonctionne aussi mais ne doit jamais être commité
-  (credentials cluster — déjà dans `.gitignore`).
-- Credentials Scaleway pour `make deploy` : passer via `--values` ou
-  `HELM_EXTRA_FLAGS="--set scaleway.token=<token> --set scaleway.organizationId=<uuid>"`.
-- Pour forcer une mise à jour helm (cas de récupération) :
-  `HELM_EXTRA_FLAGS=--force make deploy-crds`
-
-**RBAC requis sur le cluster (à appliquer une fois par cluster) :**
-
-`helm upgrade --install` stocke son état de release comme des Secrets dans le namespace
-`scaleway-system`, et les CRDs sont des ressources cluster-scoped. L'utilisateur Kubernetes
-doit avoir les droits suivants :
-
-| Scope | Ressource | Verbes |
-| --- | --- | --- |
-| Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
-| Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
-
-Sur Scaleway Kapsule, le nom d'utilisateur est de la forme
-`scaleway:bearer:<uuid-du-token-iam>`.
+Pour les prérequis d'installation et la configuration de l'environnement de développement, voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture
 

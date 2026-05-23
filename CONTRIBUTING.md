@@ -2,9 +2,9 @@
 
 Merci de vouloir contribuer au Scaleway Operator !
 
-## 🛠️ Environnement de développement
+## Environnement de développement
 
-### Prérequis obligatoires
+### Prérequis
 
 **Rust et Cargo** — installés via [rustup](https://rustup.rs) :
 
@@ -13,33 +13,57 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-Vérifier l'installation :
+Vérifier : `rustc --version` (>= 1.80 requis — kube 3.x + schemars 1.x)
+
+**Outils supplémentaires :**
 
 ```bash
-rustc --version   # >= 1.80 requis (kube 3.x + schemars 1.x)
-cargo --version
+# macOS
+brew install kind helm
+
+# Linux
+go install sigs.k8s.io/kind@latest
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
+
+Docker doit être disponible et démarré.
 
 ### Commandes de développement
 
-- Tester la conformite de l'environnement : `make env-check`
-- Tester l'application                    : `make coverage`
-- Construire le binaire                   : `make build`
-- Lint et format                          : `make check`
-- Nettoyer les artefacts                  : `make clean`
-- Construire l'image                      : `make image-build`
-- Distribuer l'image                      : `make image-push`
-- Deployer les CRDS                       : `make deploy-crd`
-- Deployer la stack operateur             : `make deploy`
-- Verifier l'etat du deploiement          : `make deploy-status`
+Utiliser `make` comme point d'entrée unique (`make help` pour la liste complète) :
+
+| Commande | Description |
+| --- | --- |
+| `make env-check` | Vérifie la conformité de l'environnement |
+| `make coverage-text` | Tests unitaires (résultat terminal, rapide) |
+| `make coverage` | Tests unitaires (rapport HTML) |
+| `make coverage-json` | Tests unitaires (rapport JSON/CI) |
+| `make test-integration-kind` | Tests d'intégration via cluster kind éphémère |
+| `make build` | Construit le binaire |
+| `make check` | Lint et format |
+| `make generate-crds` | Régénère les manifests CRD depuis `src/resources.rs` |
+| `make image-build` | Construit l'image Docker |
+| `make image-push` | Construit et pousse l'image |
+| `make deploy-crds` | Déploie les CRDs via Helm |
+| `make deploy` | Déploie l'opérateur via Helm |
+| `make deploy-status` | Affiche l'état du déploiement |
+| `make clean` | Nettoie les artefacts |
+
+> ⚠️ Toute modification de `src/resources.rs` doit être suivie de `make generate-crds`.
 
 ### Tests d'intégration
 
-Les tests d'intégration vérifient `reconcile_instance` contre un vrai API server Kubernetes avec l'API Scaleway mockée (mockito).
+Les tests vérifient `reconcile_instance` contre un vrai API server Kubernetes, avec l'API Scaleway mockée via mockito — aucune credential Scaleway réelle requise.
 
-#### Architecture des tests
+```bash
+make test-integration-kind
+```
 
-Les tests **ne créent pas** de Namespaces, NamespaceRoles ou Secrets — ces ressources sont pré-créées une seule fois via `k8s/test-fixtures.yaml`. Les tests ne créent et suppriment que des objets `Instance`.
+Le cluster kind `scaleway-operator-test` est créé et supprimé automatiquement (`trap EXIT`). Le fichier `.kube/kind-config` est nettoyé à la fin, même en cas d'échec.
+
+#### Architecture des fixtures
+
+Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRoles et Secrets sont pré-créés par `k8s/test-fixtures.yaml` (appliqué automatiquement par le script) :
 
 | Namespace | Annotation | NamespaceRole | Secret IAM | Utilisé pour |
 | --- | --- | --- | --- | --- |
@@ -50,130 +74,59 @@ Les tests **ne créent pas** de Namespaces, NamespaceRoles ou Secrets — ces re
 | `scw-test-viewer` | UUID valide | Viewer | oui | Rôle lecture seule |
 | `scw-test-editor` | UUID valide | Editor | oui | Finalizer, suppression, création, sync |
 
-#### Setup (une seule fois)
+### Déploiement sur un cluster réel
+
+**Kubeconfig :**
 
 ```bash
-# 1. Démarrer kubectl proxy (expose l'API sur http://localhost:8001)
-kubectl proxy &
-
-# 2. Installer les CRDs
-make deploy-crd
-
-# 3. Créer les ressources de test
-make deploy-test-fixtures
+KUBECONFIG=~/.kube/config make deploy-crds   # standard
+HELM_EXTRA_FLAGS=--force make deploy-crds    # forcer une mise à jour
 ```
 
-#### Lancer les tests
+**Credentials Scaleway :**
 
 ```bash
-make test-integration
+HELM_EXTRA_FLAGS="--set scaleway.token=<token> --set scaleway.organizationId=<uuid>" make deploy
 ```
 
-`KUBE_API_URL=http://127.0.0.1:8001` est passé automatiquement. Avec un cluster direct : `KUBE_API_URL="" make test-integration`.
+**RBAC requis (une fois par cluster) :**
 
-#### Nettoyage
+`helm upgrade --install` stocke son état comme des Secrets dans `scaleway-system`, et les CRDs sont cluster-scoped. L'utilisateur Kubernetes doit avoir :
 
-Instances laissées par un test qui a paniqué :
+| Scope | Ressource | Verbes |
+| --- | --- | --- |
+| Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
+| Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
 
-```bash
-kubectl delete instances -n scw-test-editor --all
-kubectl delete instances -n scw-test-viewer --all
-```
+Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-iam>`.
 
-Supprimer toutes les fixtures de test :
-
-```bash
-kubectl delete -f k8s/test-fixtures.yaml
-```
-
-> `make coverage-json` et `make test` n'exécutent **pas** les tests d'intégration (ils sont marqués `#[ignore]`).
-
-### Variables d'environnement
-
-Requises uniquement pour exécuter l'opérateur :
-
-| Variable          | Obligatoire | Description                   |
-|-------------------|-------------|-------------------------------|
-| `SCALEWAY_TOKEN`  | Oui         | Token API Scaleway            |
-| `SCALEWAY_ORG_ID` | Oui         | ID de l'organisation Scaleway |
-
-## 🐛 Signaler un bug
+## Signaler un bug
 
 1. Vérifiez que le bug n'existe pas déjà dans les issues
-2. Ouvrez une issue avec:
-   - Description claire du problème
-   - Étapes pour reproduire
-   - Comportement attendu vs actuel
-   - Version du operator et Kubernetes
+2. Ouvrez une issue avec : description claire, étapes de reproduction, comportement attendu vs actuel, version de l'opérateur et de Kubernetes
 
-## 💡 Proposer une fonctionnalité
+## Proposer une fonctionnalité
 
 1. Ouvrez une issue avec le label `enhancement`
-2. Décrivez le cas d'usage
-3. Proposez une solution ou une API
+2. Décrivez le cas d'usage et proposez une solution
 
-## 🚀 Soumettre une PR
+## Soumettre une PR
 
 1. **Fork** le dépôt
-2. **Créez une branche** (`git checkout -b feature/amazing-feature`)
-3. **Committez** vos changements (`git commit -m 'Add amazing feature'`)
-4. **Poussez** votre branche (`git push origin feature/amazing-feature`)
-5. **Ouvrez une PR** avec une description claire
+2. **Créez une branche** (`git checkout -b feat/ma-fonctionnalite`)
+3. **Committez** en conventional commits (`feat(scope): description`)
+4. **Poussez** votre branche et **ouvrez une PR** avec une description claire
 
-## 📋 Checklist avant de soumettre une PR
+**Checklist avant de soumettre :**
 
-- [ ] Code formaté, pas de warnings clippy (`make check`)
-- [ ] Tests ajoutés/passent (`make coverage`)
+- [ ] `make check` passe sans warnings
+- [ ] `make coverage-text` passe
+- [ ] `make test-integration-kind` passe (si `reconcilers.rs` ou `resources.rs` modifiés)
+- [ ] `make generate-crds` relancé si `src/resources.rs` modifié
 - [ ] Documentation à jour
-- [ ] Commit messages clairs et descriptifs
-- [ ] Pas de dépendances non nécessaires ajoutées
 
-## 🎨 Style de code
+## Style de code
 
-### Rust
-
-```rust
-// Comments on their own line
-fn my_function(param: String) -> Result<String> {
-    // Implementation
-    Ok(param)
-}
-```
-
-- Utilisez `make check` pour formater
-- Respectez les avertissements de `make check`
-- Documentez avec des doc comments (`///`)
-
-### Commits
-
-```text
-Add support for LoadBalancer resources
-
-- Implement LoadBalancer CRD
-- Add Scaleway API client methods
-- Add reconciliation logic
-
-Fixes #123
-```
-
-## 📖 Documentation
-
-- Mise à jour du README.md pour les nouvelles fonctionnalités
-- Ajouter des exemples dans `k8s/examples.yaml`
-- Ajouter les doc comments pour les fonctions publiques
-
-## 🔄 Processus de review
-
-1. Un mainteneur reviewera votre PR
-2. Demandes de changements possibles
-3. Une fois approuvée, elle sera mergée
-
-## 📞 Questions ?
-
-N'hésitez pas à:
-
-- Ouvrir une issue avec la question
-- Commenter sur une PR existante
-- Demander de l'aide
-
-Merci de votre contribution !
+- `make check` pour formater et linter
+- Pas de doc comments sur les fonctions internes (noms auto-documentés)
+- Commits en [Conventional Commits](https://www.conventionalcommits.org/)
