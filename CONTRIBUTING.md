@@ -81,7 +81,7 @@ Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRole
 | `scw-test-invalid-uuid` | `"not-a-uuid"` | Editor | — | UUID invalide |
 | `scw-test-no-secret` | UUID valide | Editor | — | Secret IAM absent |
 | `scw-test-viewer` | UUID valide | Viewer | oui | Rôle lecture seule |
-| `scw-test-editor` | UUID valide | Editor | oui | Finalizer, suppression, création, sync |
+| `scw-test-editor` | UUID valide | Editor | oui | Happy path : finalizer, suppression, création, sync, adoption, erreurs (plusieurs tests) |
 
 ### Déploiement sur un cluster réel
 
@@ -130,7 +130,7 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 
 - [ ] `make check` passe sans warnings
 - [ ] `make coverage-text` passe
-- [ ] `make test-integration-kind` passe (si `reconcilers.rs` ou `resources.rs` modifiés)
+- [ ] `make test-integration-kind` passe
 - [ ] `make generate-crds` relancé si `src/resources.rs` modifié
 - [ ] Documentation à jour
 
