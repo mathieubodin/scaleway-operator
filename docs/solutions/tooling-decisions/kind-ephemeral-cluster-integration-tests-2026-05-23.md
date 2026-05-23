@@ -103,20 +103,20 @@ Ajouter `rust-toolchain.toml` à la racine pour que rustup gère la toolchain au
 channel = "stable"
 ```
 
-## Why This Matters
+## Pourquoi cela compte
 
 - **Tests exécutables sans infrastructure** : un contributeur avec Docker, kind, helm et kubectl peut lancer `make test-integration-kind` sans aucun cluster pré-existant.
 - **Gate de release fiable** : `build-and-push` ne peut pas publier si un test d'intégration est rouge.
 - **Cleanup garanti** : `trap EXIT` (pas `trap ERR`) s'exécute que les tests passent ou échouent — aucun cluster orphelin.
 - **API Scaleway mockée** : mockito intercepte les appels HTTP dans les tests ; aucune credential Scaleway n'est transmise au cluster kind.
 
-## When to Apply
+## Quand appliquer
 
 - Opérateur kube-rs dont les tests d'intégration nécessitent un vrai API server Kubernetes
 - CI `ubuntu-latest` (Docker disponible nativement)
 - Tests qui utilisent `Client::try_default()` pour la connexion cluster
 
-## Examples
+## Exemples
 
 **Avant** — tests inutilisables en CI :
 
@@ -139,7 +139,7 @@ test-integration-kind: check-cargo check-kind check-docker check-helm
 - **`trap EXIT` et non `trap ERR`** : `ERR` ne se déclenche pas si une commande réussit avant l'erreur finale ; `EXIT` couvre tous les cas.
 - **Prérequis à documenter** : kubectl est requis (appelé dans le script) mais souvent omis des listes de prérequis axées Rust/kind/helm. Le vérifier dans `make env-check`.
 
-## Related
+## Références
 
 - `scripts/test-integration-kind.sh`
 - `k8s/test-fixtures.yaml`
