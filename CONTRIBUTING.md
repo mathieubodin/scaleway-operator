@@ -25,7 +25,7 @@ npm install -g markdownlint-cli2
 # Linux
 go install sigs.k8s.io/kind@latest
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-# kubectl : https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+# kubectl : voir https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
 npm install -g markdownlint-cli2
 ```
 
@@ -52,7 +52,6 @@ Utiliser `make` comme point d'entrée unique (`make help` pour la liste complèt
 | `make deploy-status` | Affiche l'état du déploiement |
 | `make clean` | Nettoie les artefacts |
 
-> ⚠️ Toute modification de `src/resources.rs` doit être suivie de `make generate-crds`.
 
 ### Tests d'intégration
 
@@ -85,20 +84,20 @@ Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRole
 
 ### Déploiement sur un cluster réel
 
-**Kubeconfig :**
+#### Kubeconfig
 
 ```bash
 KUBECONFIG=~/.kube/config make deploy-crds   # standard
 HELM_EXTRA_FLAGS=--force make deploy-crds    # forcer une mise à jour
 ```
 
-**Credentials Scaleway :**
+#### Credentials Scaleway
 
 ```bash
 HELM_EXTRA_FLAGS="--set scaleway.token=<token> --set scaleway.organizationId=<uuid>" make deploy
 ```
 
-**RBAC requis (une fois par cluster) :**
+#### RBAC requis (une fois par cluster)
 
 `helm upgrade --install` stocke son état comme des Secrets dans `scaleway-system`, et les CRDs sont cluster-scoped. L'utilisateur Kubernetes doit avoir :
 
