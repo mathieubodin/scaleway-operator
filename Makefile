@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage coverage-json coverage-text env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package
+.PHONY: help build check coverage coverage-json coverage-text env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -13,7 +13,6 @@ COVERAGE_DIR = target/llvm-cov
 
 KUBECONFIG ?= .kube/config
 HELM_EXTRA_FLAGS ?=
-KUBE_PROXY_PID_FILE ?= /tmp/.scaleway-operator-kube-proxy.pid
 
 CHART_CRDS_VERSION := $(shell grep '^version:' charts/scaleway-operator-crds/Chart.yaml 2>/dev/null | awk '{print $$2}')
 CHART_OP_VERSION   := $(shell grep '^version:' charts/scaleway-operator/Chart.yaml 2>/dev/null | awk '{print $$2}')
@@ -79,6 +78,16 @@ check-docker:
 		exit 1; \
 	}
 
+check-kind:
+	@command -v kind >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: kind not found. Install with:"; \
+		echo "  brew install kind                         (macOS)"; \
+		echo "  go install sigs.k8s.io/kind@latest        (Linux)"; \
+		echo ""; \
+		exit 1; \
+	}
+
 check-markdownlint:
 	@command -v markdownlint-cli2 >/dev/null 2>&1 || { \
 		echo ""; \
@@ -88,7 +97,7 @@ check-markdownlint:
 		exit 1; \
 	}
 
-env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-helm check-markdownlint ## Teste la conformite de l'environnement
+env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-kind check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
 	@echo ""
@@ -99,23 +108,8 @@ build: check-cargo ## Construire le binaire
 test: check-cargo
 	cargo test
 
-KUBE_API_URL ?= http://127.0.0.1:8001
-
-start-local-kubeapi: check-kubeconfig check-kubectl
-	@kubectl --kubeconfig=$(KUBECONFIG) proxy --port 8001 & echo $$! > $(KUBE_PROXY_PID_FILE)
-	@sleep 1
-
-test-integration: check-cargo ## Lance les tests d'integration (necessite make deploy-crds + kubectl proxy sur :8001)
-	KUBE_API_URL=$(KUBE_API_URL) cargo test --test integration -- --ignored
-
-run-integration-test-locally: check-cargo check-kubeconfig deploy-crds deploy-test-fixtures test-integration
-	@if [ -f $(KUBE_PROXY_PID_FILE) ]; then \
-		kill $$(cat $(KUBE_PROXY_PID_FILE)) 2>/dev/null || true; \
-		rm -f $(KUBE_PROXY_PID_FILE); \
-		echo "kubectl proxy stopped"; \
-	else \
-		pkill -f "kubectl.*proxy.*8001" 2>/dev/null || true; \
-	fi
+test-integration-kind: check-cargo check-kind check-docker check-helm ## Lance les tests d'integration via un cluster kind éphémère (necessite Docker)
+	bash scripts/test-integration-kind.sh
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	mkdir -p $(COVERAGE_DIR)

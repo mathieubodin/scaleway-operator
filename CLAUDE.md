@@ -23,36 +23,7 @@ Use `make` as the single entry point (see `Makefile` for full list, `make help` 
 > ⚠️ Toute modification de `src/resources.rs` (CRDs) doit être suivie de `make generate-crds`
 > pour régénérer les manifests dans `k8s/`.
 
-**Tests d'intégration (prérequis) :**
-
-```bash
-make deploy-test-fixtures  # une seule fois par cluster (namespaces/NamespaceRoles/Secrets de test)
-make test-integration      # nécessite kubectl proxy sur :8001
-```
-
-**Prérequis pour les targets deploy :**
-
-- Kubeconfig : préférer `KUBECONFIG=~/.kube/config make deploy-crds` (standard).
-  `.kube/config` à la racine du repo fonctionne aussi mais ne doit jamais être commité
-  (credentials cluster — déjà dans `.gitignore`).
-- Credentials Scaleway pour `make deploy` : passer via `--values` ou
-  `HELM_EXTRA_FLAGS="--set scaleway.token=<token> --set scaleway.organizationId=<uuid>"`.
-- Pour forcer une mise à jour helm (cas de récupération) :
-  `HELM_EXTRA_FLAGS=--force make deploy-crds`
-
-**RBAC requis sur le cluster (à appliquer une fois par cluster) :**
-
-`helm upgrade --install` stocke son état de release comme des Secrets dans le namespace
-`scaleway-system`, et les CRDs sont des ressources cluster-scoped. L'utilisateur Kubernetes
-doit avoir les droits suivants :
-
-| Scope | Ressource | Verbes |
-| --- | --- | --- |
-| Cluster | `apiextensions.k8s.io/customresourcedefinitions` | get, list, create, update, patch, delete |
-| Namespace `scaleway-system` | `secrets`, `configmaps` | get, list, watch, create, update, patch, delete |
-
-Sur Scaleway Kapsule, le nom d'utilisateur est de la forme
-`scaleway:bearer:<uuid-du-token-iam>`.
+Pour les prérequis d'installation et la configuration de l'environnement de développement, voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture
 

@@ -1,7 +1,6 @@
 /// Tests d'intégration pour reconcile_instance.
 ///
-/// Prérequis : `make deploy-crd && make deploy-test-fixtures`
-/// Exécution : `make test-integration`
+/// Exécution : `make test-integration-kind` (crée un cluster kind éphémère)
 ///
 /// Les namespaces, NamespaceRoles et Secrets sont pré-créés par `k8s/test-fixtures.yaml`.
 /// Les tests ne créent que des objets Instance (et les suppriment en fin de test).
