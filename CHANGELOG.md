@@ -2,16 +2,13 @@
 
 ## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-22)
 
-
 ### Features
 
 * **reconcilers:** add LoadBalancer reconciler with create/sync/delete lifecycle ([#33](https://github.com/mathieubodin/scaleway-operator/issues/33)) ([a6c78d2](https://github.com/mathieubodin/scaleway-operator/commit/a6c78d288b2f692b759c5d8eda75888de7a71434))
 
-
 ### Refactoring
 
 * **reconcilers:** extract pure decision layer with decide_next_action ([#29](https://github.com/mathieubodin/scaleway-operator/issues/29)) ([e55ef90](https://github.com/mathieubodin/scaleway-operator/commit/e55ef908967d3291d287274db26f5775fcc15cfc))
-
 
 ### Documentation
 

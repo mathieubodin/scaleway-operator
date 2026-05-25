@@ -88,13 +88,14 @@ enum ReconcileDecision {
     /// Créer l'instance (accès projet déjà validé lors d'un cycle précédent).
     CreateInstance { project_id: String },
     /// Synchroniser l'état depuis Scaleway.
-    SyncInstance { scaleway_id: String, project_id: String },
+    SyncInstance {
+        scaleway_id: String,
+        project_id: String,
+    },
     /// Supprimer l'instance Scaleway puis retirer le finalizer.
-    DeleteInstance { scaleway_id: String },
+    DeleteInstance,
     /// Retirer le finalizer (aucune instance Scaleway connue).
     RemoveFinalizer,
-    /// Requeue dans la durée indiquée sans I/O supplémentaire.
-    RequeueIn(Duration),
 }
 
 /// Dérive la prochaine action à effectuer à partir d'un snapshot d'état, sans effet de bord.
@@ -102,7 +103,7 @@ fn decide_next_action(input: &ReconcileInput) -> ReconcileDecision {
     // 1. Suppression prioritaire — avant toute autre vérification
     if input.deletion_requested {
         return match &input.scaleway_id {
-            Some(id) => ReconcileDecision::DeleteInstance { scaleway_id: id.clone() },
+            Some(_) => ReconcileDecision::DeleteInstance,
             None => ReconcileDecision::RemoveFinalizer,
         };
     }
@@ -164,10 +165,17 @@ enum LbReconcileDecision {
     SkipCircuitOpen,
     AddLbFinalizer,
     BlockReadOnlyRole,
-    VerifyProjectAccessLb { project_id: String },
-    CreateLoadBalancer { project_id: String },
-    SyncLoadBalancer { scaleway_id: String, project_id: String },
-    DeleteLoadBalancer { scaleway_id: String },
+    VerifyProjectAccessLb {
+        project_id: String,
+    },
+    CreateLoadBalancer {
+        project_id: String,
+    },
+    SyncLoadBalancer {
+        scaleway_id: String,
+        project_id: String,
+    },
+    DeleteLoadBalancer,
     RemoveLbFinalizer,
 }
 
@@ -175,7 +183,7 @@ fn decide_next_action_lb(input: &LbReconcileInput) -> LbReconcileDecision {
     // 1. Suppression prioritaire — avant toute autre vérification
     if input.deletion_requested {
         return match &input.scaleway_id {
-            Some(id) => LbReconcileDecision::DeleteLoadBalancer { scaleway_id: id.clone() },
+            Some(_) => LbReconcileDecision::DeleteLoadBalancer,
             None => LbReconcileDecision::RemoveLbFinalizer,
         };
     }
@@ -410,12 +418,12 @@ async fn reconcile_instance_inner(
                 namespace = %namespace,
                 "Scaleway API circuit breaker is open — skipping reconciliation"
             );
-            return Err(OperatorError::CircuitBreakerOpen);
+            Err(OperatorError::CircuitBreakerOpen)
         }
 
         ReconcileDecision::AddFinalizer => {
             add_finalizer(&instance, &api).await?;
-            return Ok(Action::requeue(Duration::from_secs(5)));
+            Ok(Action::requeue(Duration::from_secs(5)))
         }
 
         ReconcileDecision::BlockReadOnlyRole => {
@@ -429,7 +437,7 @@ async fn reconcile_instance_inner(
             status.sync_state = "Error".to_string();
             let _ = update_status(&instance, &api, status).await;
             measurer.set_outcome(ReconcileOutcome::Error);
-            return Err(e);
+            Err(e)
         }
 
         ReconcileDecision::VerifyProjectAccess { project_id } => {
@@ -456,10 +464,22 @@ async fn reconcile_instance_inner(
             };
 
             // Vérifier l'accès projet
-            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
+            call_scaleway(&ctx, || {
+                ctx.scaleway_client.verify_project_access(&project_id)
+            })
+            .await?;
 
             // Continuer directement vers la création dans le même cycle
-            execute_create_instance(&instance, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+            execute_create_instance(
+                &instance,
+                &api,
+                &ctx,
+                &namespace,
+                &ns_client,
+                &project_id,
+                &mut measurer,
+            )
+            .await
         }
 
         ReconcileDecision::CreateInstance { project_id } => {
@@ -485,10 +505,22 @@ async fn reconcile_instance_inner(
                 }
             };
 
-            execute_create_instance(&instance, &api, &ctx, &namespace, &ns_client, &project_id, &mut measurer).await
+            execute_create_instance(
+                &instance,
+                &api,
+                &ctx,
+                &namespace,
+                &ns_client,
+                &project_id,
+                &mut measurer,
+            )
+            .await
         }
 
-        ReconcileDecision::SyncInstance { scaleway_id, project_id } => {
+        ReconcileDecision::SyncInstance {
+            scaleway_id,
+            project_id,
+        } => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
 
             // Valider la spec
@@ -513,15 +545,29 @@ async fn reconcile_instance_inner(
 
             let mut status = instance.status.clone().unwrap_or_default();
 
-            match call_scaleway(&ctx, || ns_client.get_instance(&instance.spec.zone, &scaleway_id, &project_id)).await {
+            match call_scaleway(&ctx, || {
+                ns_client.get_instance(&instance.spec.zone, &scaleway_id, &project_id)
+            })
+            .await
+            {
                 Ok(info) => {
                     // Gauge swap: dec old state, inc new state
-                    let old_state = instance.status.as_ref()
+                    let old_state = instance
+                        .status
+                        .as_ref()
                         .map(|s| s.state.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, &old_state);
-                    ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, &info.state);
+                    ctx.metrics.dec_instances(
+                        &instance.spec.zone,
+                        &instance.spec.instance_type,
+                        &old_state,
+                    );
+                    ctx.metrics.inc_instances(
+                        &instance.spec.zone,
+                        &instance.spec.instance_type,
+                        &info.state,
+                    );
 
                     status.state = info.state.clone();
                     status.public_ip = info.public_ip;
@@ -534,11 +580,22 @@ async fn reconcile_instance_inner(
                 Err(OperatorError::InstanceNotFound(_)) => {
                     tracing::warn!(name = %instance.name_any(), "Instance not found in Scaleway — will recreate");
                     // Decrement gauge only if the instance was previously created (scaleway_id present)
-                    if instance.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
-                        let old_state = instance.status.as_ref()
+                    if instance
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.scaleway_id.as_ref())
+                        .is_some()
+                    {
+                        let old_state = instance
+                            .status
+                            .as_ref()
                             .map(|s| s.state.as_str())
                             .unwrap_or("unknown");
-                        ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
+                        ctx.metrics.dec_instances(
+                            &instance.spec.zone,
+                            &instance.spec.instance_type,
+                            old_state,
+                        );
                     }
                     status.scaleway_id = None;
                     status.state = "unknown".to_string();
@@ -569,12 +626,8 @@ async fn reconcile_instance_inner(
             Ok(Action::requeue(Duration::from_secs(30)))
         }
 
-        ReconcileDecision::DeleteInstance { .. } | ReconcileDecision::RemoveFinalizer => {
+        ReconcileDecision::DeleteInstance | ReconcileDecision::RemoveFinalizer => {
             handle_deletion(&instance, &api, &ctx).await
-        }
-
-        ReconcileDecision::RequeueIn(d) => {
-            return Ok(Action::requeue(d));
         }
     }
 }
@@ -608,7 +661,11 @@ async fn execute_create_instance(
         }
         None => {
             tracing::info!(name = %instance.name_any(), project_id = %project_id, "Creating new Scaleway instance");
-            match call_scaleway(ctx, || ns_client.create_instance(&instance.spec, project_id)).await {
+            match call_scaleway(ctx, || {
+                ns_client.create_instance(&instance.spec, project_id)
+            })
+            .await
+            {
                 Ok(id) => (id, false),
                 Err(e) => {
                     tracing::error!(name = %instance.name_any(), error = %e, "Failed to create instance");
@@ -629,7 +686,11 @@ async fn execute_create_instance(
     status.error_message = None;
     status.project_id = Some(project_id.to_string());
 
-    ctx.metrics.inc_instances(&instance.spec.zone, &instance.spec.instance_type, "creating");
+    ctx.metrics.inc_instances(
+        &instance.spec.zone,
+        &instance.spec.instance_type,
+        "creating",
+    );
 
     if adopted {
         measurer.set_outcome(ReconcileOutcome::Adopted);
@@ -675,7 +736,11 @@ async fn handle_deletion(
             let namespace = instance.namespace().unwrap_or_default();
             match get_namespace_client(ctx, &namespace).await {
                 Ok(ns_client) => {
-                    match call_scaleway(ctx, || ns_client.delete_instance(&instance.spec.zone, instance_id)).await {
+                    match call_scaleway(ctx, || {
+                        ns_client.delete_instance(&instance.spec.zone, instance_id)
+                    })
+                    .await
+                    {
                         Ok(_) => {
                             tracing::info!(
                                 name = %instance.name_any(),
@@ -735,10 +800,13 @@ async fn handle_deletion(
     })?;
 
     // Decrement gauge: the instance is no longer managed
-    let old_state = instance.status.as_ref()
+    let old_state = instance
+        .status
+        .as_ref()
         .map(|s| s.state.as_str())
         .unwrap_or("unknown");
-    ctx.metrics.dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
+    ctx.metrics
+        .dec_instances(&instance.spec.zone, &instance.spec.instance_type, old_state);
 
     measurer.set_outcome(ReconcileOutcome::Deleted);
     Ok(Action::await_change())
@@ -929,9 +997,13 @@ async fn reconcile_load_balancer_inner(
                 return Err(e);
             }
 
-            call_scaleway(&ctx, || ctx.scaleway_client.verify_project_access(&project_id)).await?;
+            call_scaleway(&ctx, || {
+                ctx.scaleway_client.verify_project_access(&project_id)
+            })
+            .await?;
 
-            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer)
+                .await
         }
 
         LbReconcileDecision::CreateLoadBalancer { project_id } => {
@@ -942,21 +1014,37 @@ async fn reconcile_load_balancer_inner(
                 return Err(e);
             }
 
-            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer).await
+            execute_create_load_balancer(&lb, &api, &ctx, &namespace, &project_id, &mut measurer)
+                .await
         }
 
-        LbReconcileDecision::SyncLoadBalancer { scaleway_id, project_id } => {
+        LbReconcileDecision::SyncLoadBalancer {
+            scaleway_id,
+            project_id,
+        } => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
             // GET uses the global operator token (read-only scope).
             // TODO: migrate to ns_client when the namespace IAM key covers read operations.
 
             let mut status = lb.status.clone().unwrap_or_default();
 
-            match call_scaleway(&ctx, || ctx.scaleway_client.get_load_balancer(&lb.spec.zone, &scaleway_id)).await {
+            match call_scaleway(&ctx, || {
+                ctx.scaleway_client
+                    .get_load_balancer(&lb.spec.zone, &scaleway_id)
+            })
+            .await
+            {
                 Ok(info) => {
-                    let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("").to_string();
-                    ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &old_state);
-                    ctx.metrics.inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &info.state);
+                    let old_state = lb
+                        .status
+                        .as_ref()
+                        .map(|s| s.state.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    ctx.metrics
+                        .dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &old_state);
+                    ctx.metrics
+                        .inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, &info.state);
 
                     status.state = info.state;
                     status.vip_address = info.vip_address;
@@ -968,9 +1056,15 @@ async fn reconcile_load_balancer_inner(
                 }
                 Err(OperatorError::LbNotFound(_)) => {
                     tracing::warn!(name = %lb.name_any(), "Load balancer not found in Scaleway — will recreate");
-                    if lb.status.as_ref().and_then(|s| s.scaleway_id.as_ref()).is_some() {
+                    if lb
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.scaleway_id.as_ref())
+                        .is_some()
+                    {
                         let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("");
-                        ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
+                        ctx.metrics
+                            .dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
                     }
                     status.scaleway_id = None;
                     status.state = String::new();
@@ -997,7 +1091,7 @@ async fn reconcile_load_balancer_inner(
             Ok(Action::requeue(Duration::from_secs(30)))
         }
 
-        LbReconcileDecision::DeleteLoadBalancer { .. } | LbReconcileDecision::RemoveLbFinalizer => {
+        LbReconcileDecision::DeleteLoadBalancer | LbReconcileDecision::RemoveLbFinalizer => {
             handle_lb_deletion(&lb, &api, &ctx).await
         }
     }
@@ -1016,8 +1110,15 @@ async fn execute_create_load_balancer(
 
     // Orphan adoption via tag-based lookup (name is not unique in Scaleway LB API)
     let (lb_id, adopted) = match call_scaleway(ctx, || {
-        ctx.scaleway_client.find_load_balancer_by_name(&lb.spec.zone, namespace, &cr_name, project_id)
-    }).await? {
+        ctx.scaleway_client.find_load_balancer_by_name(
+            &lb.spec.zone,
+            namespace,
+            &cr_name,
+            project_id,
+        )
+    })
+    .await?
+    {
         Some(existing_id) => {
             tracing::warn!(
                 name = %lb.name_any(),
@@ -1029,8 +1130,11 @@ async fn execute_create_load_balancer(
         None => {
             tracing::info!(name = %lb.name_any(), project_id = %project_id, "Creating new Scaleway load balancer");
             match call_scaleway(ctx, || {
-                ctx.scaleway_client.create_load_balancer(&lb.spec, project_id, namespace, &cr_name)
-            }).await {
+                ctx.scaleway_client
+                    .create_load_balancer(&lb.spec, project_id, namespace, &cr_name)
+            })
+            .await
+            {
                 Ok(id) => (id, false),
                 Err(e) => {
                     tracing::error!(name = %lb.name_any(), error = %e, "Failed to create load balancer");
@@ -1050,7 +1154,8 @@ async fn execute_create_load_balancer(
     status.error_message = None;
     status.project_id = Some(project_id.to_string());
 
-    ctx.metrics.inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, "pending");
+    ctx.metrics
+        .inc_load_balancers(&lb.spec.zone, &lb.spec.lb_type, "pending");
 
     if adopted {
         measurer.set_outcome(ReconcileOutcome::Adopted);
@@ -1075,15 +1180,25 @@ async fn handle_lb_deletion(
             let namespace = lb.namespace().unwrap_or_default();
             match get_namespace_client(ctx, &namespace).await {
                 Ok(_ns_client) => {
-                    match call_scaleway(ctx, || ctx.scaleway_client.delete_load_balancer(&lb.spec.zone, lb_id, true)).await {
+                    match call_scaleway(ctx, || {
+                        ctx.scaleway_client
+                            .delete_load_balancer(&lb.spec.zone, lb_id, true)
+                    })
+                    .await
+                    {
                         Ok(_) => {
                             tracing::info!(name = %lb.name_any(), lb_id = %lb_id, "Successfully deleted Scaleway load balancer");
                         }
-                        Err(OperatorError::ScalewayError { ref status, .. }) if status.contains("409") || status.contains("423") => {
+                        Err(OperatorError::ScalewayError { ref status, .. })
+                            if status.contains("409") || status.contains("423") =>
+                        {
                             tracing::warn!(name = %lb.name_any(), lb_id = %lb_id, "Load balancer is locked — cannot delete yet");
                             let mut st = lb.status.clone().unwrap_or_default();
                             st.sync_state = "TerminationBlocked".to_string();
-                            st.error_message = Some("Load balancer is locked — deletion blocked by Scaleway".to_string());
+                            st.error_message = Some(
+                                "Load balancer is locked — deletion blocked by Scaleway"
+                                    .to_string(),
+                            );
                             let _ = update_lb_status(lb, api, st).await;
                             measurer.set_outcome(ReconcileOutcome::Error);
                             return Err(OperatorError::ScalewayError {
@@ -1109,7 +1224,8 @@ async fn handle_lb_deletion(
                     let mut st = lb.status.clone().unwrap_or_default();
                     st.sync_state = "FinalizerRemovedWithoutScalewayDelete".to_string();
                     st.error_message = Some(
-                        "IAM Secret missing at deletion time — Scaleway LB may still exist".to_string(),
+                        "IAM Secret missing at deletion time — Scaleway LB may still exist"
+                            .to_string(),
                     );
                     if let Err(patch_err) = update_lb_status(lb, api, st).await {
                         tracing::error!(
@@ -1126,18 +1242,26 @@ async fn handle_lb_deletion(
 
     // Remove finalizer
     let finalizers = lb.metadata.finalizers.clone().unwrap_or_default();
-    let new_finalizers: Vec<String> = finalizers.into_iter().filter(|f| f != LB_FINALIZER).collect();
+    let new_finalizers: Vec<String> = finalizers
+        .into_iter()
+        .filter(|f| f != LB_FINALIZER)
+        .collect();
 
     let patch = serde_json::json!({"metadata": {"finalizers": new_finalizers}});
-    api.patch(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch))
-        .await
-        .map_err(|e| {
-            measurer.set_outcome(ReconcileOutcome::Error);
-            OperatorError::KubeError(e)
-        })?;
+    api.patch(
+        &lb.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await
+    .map_err(|e| {
+        measurer.set_outcome(ReconcileOutcome::Error);
+        OperatorError::KubeError(e)
+    })?;
 
     let old_state = lb.status.as_ref().map(|s| s.state.as_str()).unwrap_or("");
-    ctx.metrics.dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
+    ctx.metrics
+        .dec_load_balancers(&lb.spec.zone, &lb.spec.lb_type, old_state);
 
     measurer.set_outcome(ReconcileOutcome::Deleted);
     Ok(Action::await_change())
@@ -1147,22 +1271,41 @@ async fn add_lb_finalizer(lb: &LoadBalancer, api: &Api<LoadBalancer>) -> Result<
     let mut finalizers = lb.metadata.finalizers.clone().unwrap_or_default();
     finalizers.push(LB_FINALIZER.to_string());
     let patch = serde_json::json!({"metadata": {"finalizers": finalizers}});
-    api.patch(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch)).await?;
+    api.patch(
+        &lb.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
     Ok(())
 }
 
-async fn update_lb_status(lb: &LoadBalancer, api: &Api<LoadBalancer>, status: LoadBalancerStatus) -> Result<()> {
+async fn update_lb_status(
+    lb: &LoadBalancer,
+    api: &Api<LoadBalancer>,
+    status: LoadBalancerStatus,
+) -> Result<()> {
     let patch = serde_json::json!({"status": status});
-    api.patch_status(&lb.name_any(), &PatchParams::default(), &Patch::Merge(patch)).await?;
+    api.patch_status(
+        &lb.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
     Ok(())
 }
 
-async fn validate_lb_spec(spec: &crate::resources::LoadBalancerSpec, scaleway_client: &ScalewayClient) -> Result<()> {
+async fn validate_lb_spec(
+    spec: &crate::resources::LoadBalancerSpec,
+    scaleway_client: &ScalewayClient,
+) -> Result<()> {
     scaleway_client.validate_zone(&spec.zone).await?;
     scaleway_client.validate_lb_type(&spec.lb_type)?;
 
     if spec.name.is_empty() {
-        return Err(OperatorError::ConfigError("name cannot be empty".to_string()));
+        return Err(OperatorError::ConfigError(
+            "name cannot be empty".to_string(),
+        ));
     }
 
     Ok(())
@@ -1193,7 +1336,11 @@ fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) ->
         // Backoff exponentiel : 30s, 60s, 120s, 240s, 300s (max)
         let delay_secs = (30u64 * (1u64 << (attempts - 1).min(9))).min(300);
         if matches!(error, OperatorError::CircuitBreakerOpen) {
-            tracing::warn!(attempts = attempts, retry_in_secs = delay_secs, "Scaleway API circuit breaker open — backing off");
+            tracing::warn!(
+                attempts = attempts,
+                retry_in_secs = delay_secs,
+                "Scaleway API circuit breaker open — backing off"
+            );
         } else {
             tracing::error!(error = %error, attempts = attempts, retry_in_secs = delay_secs, "Transient reconciliation error");
         }
@@ -1208,7 +1355,12 @@ pub fn error_policy<R: kube::ResourceExt>(
     ctx: Arc<Context>,
 ) -> Action {
     ctx.metrics.record_error(error);
-    let key = format!("{}/{}/{}", kind, resource.namespace().unwrap_or_default(), resource.name_any());
+    let key = format!(
+        "{}/{}/{}",
+        kind,
+        resource.namespace().unwrap_or_default(),
+        resource.name_any()
+    );
     error_policy_inner(key, error, &ctx)
 }
 
@@ -1233,14 +1385,26 @@ mod tests {
 
     #[test]
     fn test_decide_circuit_open_returns_skip() {
-        let input = ReconcileInput { circuit_open: true, ..base_input() };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::SkipCircuitOpen));
+        let input = ReconcileInput {
+            circuit_open: true,
+            ..base_input()
+        };
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::SkipCircuitOpen
+        ));
     }
 
     #[test]
     fn test_decide_finalizer_absent_returns_add_finalizer() {
-        let input = ReconcileInput { finalizer_present: false, ..base_input() };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::AddFinalizer));
+        let input = ReconcileInput {
+            finalizer_present: false,
+            ..base_input()
+        };
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::AddFinalizer
+        ));
     }
 
     #[test]
@@ -1249,13 +1413,19 @@ mod tests {
             scaleway_role: "Viewer".to_string(),
             ..base_input()
         };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::BlockReadOnlyRole));
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::BlockReadOnlyRole
+        ));
     }
 
     #[test]
     fn test_decide_no_scaleway_id_write_role_returns_create() {
         let input = base_input();
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::CreateInstance { .. }));
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::CreateInstance { .. }
+        ));
     }
 
     #[test]
@@ -1264,7 +1434,10 @@ mod tests {
             scaleway_id: Some("srv-abc123".to_string()),
             ..base_input()
         };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::SyncInstance { .. }));
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::SyncInstance { .. }
+        ));
     }
 
     #[test]
@@ -1274,7 +1447,10 @@ mod tests {
             scaleway_id: Some("srv-abc123".to_string()),
             ..base_input()
         };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::DeleteInstance { .. }));
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::DeleteInstance
+        ));
     }
 
     #[test]
@@ -1284,7 +1460,10 @@ mod tests {
             scaleway_id: None,
             ..base_input()
         };
-        assert!(matches!(decide_next_action(&input), ReconcileDecision::RemoveFinalizer));
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::RemoveFinalizer
+        ));
     }
 
     // --- role_allows_write ---
@@ -1349,7 +1528,10 @@ mod tests {
 
     #[test]
     fn test_lb_decide_finalizer_absent_returns_add_finalizer() {
-        let input = LbReconcileInput { finalizer_present: false, ..base_lb_input() };
+        let input = LbReconcileInput {
+            finalizer_present: false,
+            ..base_lb_input()
+        };
         assert!(matches!(
             decide_next_action_lb(&input),
             LbReconcileDecision::AddLbFinalizer
@@ -1358,7 +1540,10 @@ mod tests {
 
     #[test]
     fn test_lb_decide_circuit_open_returns_skip() {
-        let input = LbReconcileInput { circuit_open: true, ..base_lb_input() };
+        let input = LbReconcileInput {
+            circuit_open: true,
+            ..base_lb_input()
+        };
         assert!(matches!(
             decide_next_action_lb(&input),
             LbReconcileDecision::SkipCircuitOpen
@@ -1386,7 +1571,7 @@ mod tests {
         };
         assert!(matches!(
             decide_next_action_lb(&input),
-            LbReconcileDecision::DeleteLoadBalancer { .. }
+            LbReconcileDecision::DeleteLoadBalancer
         ));
     }
 
@@ -1435,7 +1620,10 @@ mod tests {
         // avec "loadbalancer/{ns}/{name}" pour des ressources homonymes.
         let instance_key = format!("instance/{}/{}", "production", "web");
         let lb_key = format!("loadbalancer/{}/{}", "production", "web");
-        assert_ne!(instance_key, lb_key, "instance and LB keys must not collide");
+        assert_ne!(
+            instance_key, lb_key,
+            "instance and LB keys must not collide"
+        );
         assert!(instance_key.starts_with("instance/"));
         assert!(lb_key.starts_with("loadbalancer/"));
     }
@@ -1501,7 +1689,8 @@ mod tests {
     }
 
     fn histogram_sample_count(metrics: &OperatorMetrics, outcome_label: &str) -> u64 {
-        metrics.reconcile_duration_seconds
+        metrics
+            .reconcile_duration_seconds
             .with_label_values(&[outcome_label])
             .get_sample_count()
     }
@@ -1516,8 +1705,11 @@ mod tests {
             // drop without set_outcome
         }
         // Duration should have been observed under the "Error" label
-        assert_eq!(histogram_sample_count(&metrics, "Error"), 1,
-            "Error histogram should have 1 observation after drop-without-outcome");
+        assert_eq!(
+            histogram_sample_count(&metrics, "Error"),
+            1,
+            "Error histogram should have 1 observation after drop-without-outcome"
+        );
     }
 
     /// Drop without set_outcome must NOT update last_reconcile_at.
@@ -1673,7 +1865,9 @@ mod tests {
             metrics: fresh_metrics(),
             last_reconcile_at: AtomicI64::new(0),
             retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
-            circuit_breaker: std::sync::Mutex::new(crate::context::CircuitBreakerState::Closed { failure_count: 0 }),
+            circuit_breaker: std::sync::Mutex::new(crate::context::CircuitBreakerState::Closed {
+                failure_count: 0,
+            }),
         })
     }
 
@@ -1761,7 +1955,11 @@ mod tests {
             OperatorError::ProjectAccessDenied("bad".to_string()),
         ] {
             let action = error_policy("instance", dummy_instance(), &err, ctx.clone());
-            assert_eq!(action, Action::await_change(), "expected await_change for {err:?}");
+            assert_eq!(
+                action,
+                Action::await_change(),
+                "expected await_change for {err:?}"
+            );
         }
     }
 
