@@ -2,7 +2,6 @@
 
 ## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.8...scaleway-operator-crds-v0.1.9) (2026-05-22)
 
-
 ### Documentation
 
 * remove spurious blank lines in changelogs and docs ([15fa3ab](https://github.com/mathieubodin/scaleway-operator/commit/15fa3ab6589f2ae5b171e94574a48bf2bd5fdf80))

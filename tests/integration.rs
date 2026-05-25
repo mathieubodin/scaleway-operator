@@ -108,13 +108,13 @@ impl TestFixture {
             ),
             organization_id: "test-org".to_string(),
             scaleway_base_url: mock_url.to_string(),
-            metrics: scaleway_operator::metrics::OperatorMetrics::new(
-                &prometheus::Registry::new(),
-            )
-            .unwrap(),
+            metrics: scaleway_operator::metrics::OperatorMetrics::new(&prometheus::Registry::new())
+                .unwrap(),
             last_reconcile_at: std::sync::atomic::AtomicI64::new(0),
             retry_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
-            circuit_breaker: std::sync::Mutex::new(scaleway_operator::context::CircuitBreakerState::Closed { failure_count: 0 }),
+            circuit_breaker: std::sync::Mutex::new(
+                scaleway_operator::context::CircuitBreakerState::Closed { failure_count: 0 },
+            ),
         })
     }
 
@@ -594,21 +594,35 @@ async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
     let lb_api: Api<LoadBalancer> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
 
     let lb = lb_api
-        .create(&PostParams::default(), &build_load_balancer(NS_EDITOR, &name))
+        .create(
+            &PostParams::default(),
+            &build_load_balancer(NS_EDITOR, &name),
+        )
         .await
         .expect("Failed to create LoadBalancer CR");
 
     let ctx = fixture.ctx(&server.url());
     let result = scaleway_operator::reconcilers::reconcile_load_balancer(Arc::new(lb), ctx).await;
 
-    let updated = lb_api.get(&name).await.expect("Failed to re-fetch LoadBalancer");
+    let updated = lb_api
+        .get(&name)
+        .await
+        .expect("Failed to re-fetch LoadBalancer");
     let _ = lb_api.delete(&name, &DeleteParams::default()).await;
     drop(server);
 
     // AddFinalizer returns Ok(requeue 5s)
-    assert!(result.is_ok(), "Expected Ok on first reconcile, got {:?}", result);
     assert!(
-        updated.metadata.finalizers.unwrap_or_default().contains(&"scaleway.mathieubodin.io/loadbalancer-finalizer".to_string()),
+        result.is_ok(),
+        "Expected Ok on first reconcile, got {:?}",
+        result
+    );
+    assert!(
+        updated
+            .metadata
+            .finalizers
+            .unwrap_or_default()
+            .contains(&"scaleway.mathieubodin.io/loadbalancer-finalizer".to_string()),
         "Finalizer should be present after first reconcile"
     );
 }

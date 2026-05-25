@@ -1140,9 +1140,7 @@ mod tests {
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         let result = client.get_load_balancer("fr-par-1", "lb-gone").await;
 
-        assert!(
-            matches!(result, Err(OperatorError::LbNotFound(id)) if id == "lb-gone")
-        );
+        assert!(matches!(result, Err(OperatorError::LbNotFound(id)) if id == "lb-gone"));
     }
 
     #[tokio::test]
@@ -1220,10 +1218,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_lb_type_invalid() {
         let result = test_client().validate_lb_type("MEGA-LB");
-        assert!(matches!(
-            result,
-            Err(OperatorError::InvalidLbType(_))
-        ));
+        assert!(matches!(result, Err(OperatorError::InvalidLbType(_))));
     }
 
     #[tokio::test]

@@ -8,8 +8,8 @@ use scaleway_operator::{
     scaleway::ScalewayClient,
     server::run_axum_server,
 };
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[tokio::main]
@@ -76,7 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lb_api = Api::<LoadBalancer>::all(client);
 
     let instance_ctrl = Controller::new(instance_api, Default::default())
-        .run(reconcile_instance, |obj, err, ctx| error_policy("instance", obj, err, ctx), Arc::clone(&context))
+        .run(
+            reconcile_instance,
+            |obj, err, ctx| error_policy("instance", obj, err, ctx),
+            Arc::clone(&context),
+        )
         .for_each(|res| async move {
             if let Err(e) = res {
                 tracing::error!(error = %e, "Instance reconciliation failed");
@@ -84,7 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
     let lb_ctrl = Controller::new(lb_api, Default::default())
-        .run(reconcile_load_balancer, |obj, err, ctx| error_policy("loadbalancer", obj, err, ctx), Arc::clone(&context))
+        .run(
+            reconcile_load_balancer,
+            |obj, err, ctx| error_policy("loadbalancer", obj, err, ctx),
+            Arc::clone(&context),
+        )
         .for_each(|res| async move {
             if let Err(e) = res {
                 tracing::error!(error = %e, "LoadBalancer reconciliation failed");

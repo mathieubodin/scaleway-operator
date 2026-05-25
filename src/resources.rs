@@ -105,7 +105,11 @@ impl Default for InstanceStatus {
 // ============== LoadBalancer Resource ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "LoadBalancer")]
+#[kube(
+    group = "scaleway.mathieubodin.io",
+    version = "v1",
+    kind = "LoadBalancer"
+)]
 #[kube(namespaced)]
 #[kube(status = "LoadBalancerStatus")]
 #[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scalewayId"}"#)]

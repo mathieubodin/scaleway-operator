@@ -62,14 +62,20 @@ impl Context {
     pub fn record_scaleway_failure(&self) {
         let mut state = self.circuit_breaker.lock().unwrap();
         match *state {
-            CircuitBreakerState::Closed { ref mut failure_count } => {
+            CircuitBreakerState::Closed {
+                ref mut failure_count,
+            } => {
                 *failure_count += 1;
                 if *failure_count >= CIRCUIT_FAILURE_THRESHOLD {
-                    *state = CircuitBreakerState::Open { opened_at: Instant::now() };
+                    *state = CircuitBreakerState::Open {
+                        opened_at: Instant::now(),
+                    };
                 }
             }
             CircuitBreakerState::HalfOpen => {
-                *state = CircuitBreakerState::Open { opened_at: Instant::now() };
+                *state = CircuitBreakerState::Open {
+                    opened_at: Instant::now(),
+                };
             }
             CircuitBreakerState::Open { .. } => {}
         }
@@ -83,7 +89,9 @@ impl Context {
             CircuitBreakerState::HalfOpen => {
                 *state = CircuitBreakerState::Closed { failure_count: 0 };
             }
-            CircuitBreakerState::Closed { ref mut failure_count } => {
+            CircuitBreakerState::Closed {
+                ref mut failure_count,
+            } => {
                 *failure_count = 0;
             }
             CircuitBreakerState::Open { .. } => {}
@@ -159,7 +167,9 @@ mod tests {
 
     impl TestCircuit {
         fn new() -> Self {
-            Self { cb: Mutex::new(CircuitBreakerState::Closed { failure_count: 0 }) }
+            Self {
+                cb: Mutex::new(CircuitBreakerState::Closed { failure_count: 0 }),
+            }
         }
 
         fn is_open(&self) -> bool {
@@ -180,14 +190,20 @@ mod tests {
         fn failure(&self) {
             let mut state = self.cb.lock().unwrap();
             match *state {
-                CircuitBreakerState::Closed { ref mut failure_count } => {
+                CircuitBreakerState::Closed {
+                    ref mut failure_count,
+                } => {
                     *failure_count += 1;
                     if *failure_count >= CIRCUIT_FAILURE_THRESHOLD {
-                        *state = CircuitBreakerState::Open { opened_at: Instant::now() };
+                        *state = CircuitBreakerState::Open {
+                            opened_at: Instant::now(),
+                        };
                     }
                 }
                 CircuitBreakerState::HalfOpen => {
-                    *state = CircuitBreakerState::Open { opened_at: Instant::now() };
+                    *state = CircuitBreakerState::Open {
+                        opened_at: Instant::now(),
+                    };
                 }
                 CircuitBreakerState::Open { .. } => {}
             }
@@ -199,7 +215,9 @@ mod tests {
                 CircuitBreakerState::HalfOpen => {
                     *state = CircuitBreakerState::Closed { failure_count: 0 };
                 }
-                CircuitBreakerState::Closed { ref mut failure_count } => {
+                CircuitBreakerState::Closed {
+                    ref mut failure_count,
+                } => {
                     *failure_count = 0;
                 }
                 CircuitBreakerState::Open { .. } => {}
@@ -210,15 +228,22 @@ mod tests {
     #[test]
     fn test_circuit_opens_after_five_failures() {
         let cb = TestCircuit::new();
-        for _ in 0..5 { cb.failure(); }
+        for _ in 0..5 {
+            cb.failure();
+        }
         assert!(cb.is_open(), "circuit should be open after 5 failures");
     }
 
     #[test]
     fn test_circuit_stays_closed_after_four_failures() {
         let cb = TestCircuit::new();
-        for _ in 0..4 { cb.failure(); }
-        assert!(!cb.is_open(), "circuit should remain closed after only 4 failures");
+        for _ in 0..4 {
+            cb.failure();
+        }
+        assert!(
+            !cb.is_open(),
+            "circuit should remain closed after only 4 failures"
+        );
     }
 
     #[test]
@@ -226,7 +251,10 @@ mod tests {
         let cb = TestCircuit::new();
         *cb.cb.lock().unwrap() = CircuitBreakerState::HalfOpen;
         cb.success();
-        assert!(!cb.is_open(), "circuit should be closed after success in HalfOpen");
+        assert!(
+            !cb.is_open(),
+            "circuit should be closed after success in HalfOpen"
+        );
     }
 
     #[test]
@@ -234,17 +262,27 @@ mod tests {
         let cb = TestCircuit::new();
         *cb.cb.lock().unwrap() = CircuitBreakerState::HalfOpen;
         cb.failure();
-        assert!(cb.is_open(), "circuit should reopen after failure in HalfOpen");
+        assert!(
+            cb.is_open(),
+            "circuit should reopen after failure in HalfOpen"
+        );
     }
 
     #[test]
     fn test_success_in_closed_resets_failure_count() {
         let cb = TestCircuit::new();
-        for _ in 0..4 { cb.failure(); }
+        for _ in 0..4 {
+            cb.failure();
+        }
         cb.success();
         // After reset, 4 more failures should not open the circuit
-        for _ in 0..4 { cb.failure(); }
-        assert!(!cb.is_open(), "failure_count should have been reset to 0 by success");
+        for _ in 0..4 {
+            cb.failure();
+        }
+        assert!(
+            !cb.is_open(),
+            "failure_count should have been reset to 0 by success"
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
-use axum::{extract::State, routing::get, Router};
 use axum::http::StatusCode;
+use axum::{extract::State, routing::get, Router};
 use prometheus::{Encoder, TextEncoder};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::context::Context;
@@ -31,9 +31,7 @@ pub async fn run_axum_server(ctx: Arc<Context>, registry: Arc<prometheus::Regist
 
     tracing::info!("Axum server listening on :8080");
 
-    axum::serve(listener, app)
-        .await
-        .expect("axum server error");
+    axum::serve(listener, app).await.expect("axum server error");
 }
 
 async fn healthz() -> (StatusCode, &'static str) {
@@ -58,7 +56,11 @@ async fn readyz(State(state): State<AppState>) -> StatusCode {
 
 async fn metrics_handler(
     State(state): State<AppState>,
-) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1], String) {
+) -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    String,
+) {
     let encoder = TextEncoder::new();
     let metric_families = state.registry.gather();
     let mut buf = Vec::new();
@@ -73,7 +75,10 @@ async fn metrics_handler(
     let body = String::from_utf8(buf).unwrap_or_default();
     (
         StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         body,
     )
 }
