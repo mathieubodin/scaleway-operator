@@ -131,7 +131,7 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 | Repository access | Only select repositories → `scaleway-operator` |
 | Repository permissions → Issues | Read-only |
 | Repository permissions → Pull requests | Read-only |
-| User permissions → Projects | Read and write |
+| Account permissions → Projects | Read and write |
 
 **2. Ajouter le secret** — [Settings → Secrets → Actions → New](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions/new) :
 
