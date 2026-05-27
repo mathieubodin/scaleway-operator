@@ -122,16 +122,12 @@ Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimen
 
 Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `parse-cost-comment`) requièrent un fine-grained PAT stocké comme secret `PROJECT_TOKEN`.
 
-**1. Créer le PAT** — [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new) :
+**1. Créer le PAT** — les fine-grained PATs ne supportent pas encore les projets personnels (user-owned). Utiliser un **classic PAT** : [github.com/settings/tokens/new](https://github.com/settings/tokens/new) :
 
 | Champ | Valeur |
 | --- | --- |
-| Token name | `scaleway-operator-project-v2` |
-| Resource owner | `mathieubodin` |
-| Repository access | Only select repositories → `scaleway-operator` |
-| Repository permissions → Issues | Read-only |
-| Repository permissions → Pull requests | Read-only |
-| Account permissions → Projects | Read and write |
+| Note | `scaleway-operator-project-v2` |
+| Scopes | `project` (Full control of projects) |
 
 **2. Ajouter le secret** — [Settings → Secrets → Actions → New](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions/new) :
 
