@@ -127,6 +127,7 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 | Champ | Valeur |
 | --- | --- |
 | Note | `scaleway-operator-project` |
+| Expiration | 1 year (ou "No expiration" si tu préfères ne pas le renouveler) |
 | Scopes | `project` (Full control of projects) |
 
 **2. Ajouter le secret** — [Settings → Secrets → Actions → New](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions/new) :
