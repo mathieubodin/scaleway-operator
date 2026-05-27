@@ -118,6 +118,30 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 Le [Project v2](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
 Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
 
+### Configurer le secret `PROJECT_TOKEN`
+
+Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `parse-cost-comment`) requièrent un fine-grained PAT stocké comme secret `PROJECT_TOKEN`.
+
+**1. Créer le PAT** — [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new) :
+
+| Champ | Valeur |
+| --- | --- |
+| Token name | `scaleway-operator-project-v2` |
+| Resource owner | `mathieubodin` |
+| Repository access | Only select repositories → `scaleway-operator` |
+| Repository permissions → Issues | Read-only |
+| Repository permissions → Pull requests | Read-only |
+| User permissions → Projects | Read and write |
+
+**2. Ajouter le secret** — [Settings → Secrets → Actions → New](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions/new) :
+
+| Champ | Valeur |
+| --- | --- |
+| Name | `PROJECT_TOKEN` |
+| Secret | valeur du PAT généré |
+
+Sans ce secret, les workflows s'arrêtent proprement avec un warning — aucun check ne bloque.
+
 ## Proposer une fonctionnalité
 
 1. Ouvrez une issue avec le label `enhancement`
