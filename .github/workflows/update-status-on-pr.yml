@@ -1,0 +1,104 @@
+name: Update Roadmap Status on PR events
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+
+# Met à jour le champ Status du Project v2 #2 pour les issues liées via "Closes #N" / "Fixes #N" / "Resolves #N" :
+#   - PR ouverte ou ré-ouverte  → Status: Review
+#   - PR mergée                 → Status: Done
+#   - PR fermée non mergée      → aucun changement (l'issue reste où elle était)
+#
+# Requiert le secret PROJECT_TOKEN — fine-grained PAT avec :
+#   - Repository permissions: Pull requests (Read), Issues (Read)
+#   - User permissions: Projects (Read and write)
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      PROJECT_ID: PVT_kwHOAAJUjc4BYpzh
+      STATUS_FIELD_ID: PVTSSF_lAHOAAJUjc4BYpzhzhTuEok
+      OPTION_REVIEW: 86a38049
+      OPTION_DONE: 98236657
+    steps:
+      - name: Determine target Status
+        id: target
+        run: |
+          if [ "${{ github.event.action }}" = "closed" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            echo "option_id=$OPTION_DONE" >> "$GITHUB_OUTPUT"
+            echo "label=Done" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.action }}" = "opened" ] || [ "${{ github.event.action }}" = "reopened" ]; then
+            echo "option_id=$OPTION_REVIEW" >> "$GITHUB_OUTPUT"
+            echo "label=Review" >> "$GITHUB_OUTPUT"
+          else
+            echo "option_id=" >> "$GITHUB_OUTPUT"
+            echo "label=(skip)" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Target Status: $(grep '^label=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
+
+      - name: Skip if no transition
+        if: steps.target.outputs.option_id == ''
+        run: echo "No Status transition for action=${{ github.event.action }} merged=${{ github.event.pull_request.merged }} — exiting."
+
+      - name: Fetch linked issues
+        if: steps.target.outputs.option_id != ''
+        id: linked
+        run: |
+          issues=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[] | "\(.number)\t\(.id)"')
+          if [ -z "$issues" ]; then
+            echo "No closing issue references found (looked for Closes/Fixes/Resolves keywords)."
+          fi
+          {
+            echo 'issues<<EOF'
+            echo "$issues"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update each linked issue Status
+        if: steps.target.outputs.option_id != '' && steps.linked.outputs.issues != ''
+        run: |
+          while IFS=$'\t' read -r number issue_node_id; do
+            [ -z "$number" ] && continue
+            echo "→ Issue #${number} (${issue_node_id}) → ${{ steps.target.outputs.label }}"
+
+            # 1. Ensure the issue is in the Project (idempotent — returns existing if already added)
+            item_id=$(gh api graphql -f query='
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                  item { id }
+                }
+              }' -f projectId="$PROJECT_ID" -f contentId="$issue_node_id" \
+              --jq '.data.addProjectV2ItemById.item.id')
+
+            if [ -z "$item_id" ] || [ "$item_id" = "null" ]; then
+              echo "  ✗ Could not add/find item for issue #${number} — skipping"
+              continue
+            fi
+
+            # 2. Update the Status field for this item
+            gh api graphql -f query='
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }' \
+              -f projectId="$PROJECT_ID" \
+              -f itemId="$item_id" \
+              -f fieldId="$STATUS_FIELD_ID" \
+              -f optionId="${{ steps.target.outputs.option_id }}" \
+              --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id'
+
+            echo "  ✓ Updated"
+          done <<< "${{ steps.linked.outputs.issues }}"

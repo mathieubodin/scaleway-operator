@@ -1,6 +1,6 @@
 ---
 name: Scaleway Kubernetes Operator
-last_updated: 2026-05-13
+last_updated: 2026-05-24
 ---
 
 # Scaleway Kubernetes Operator Strategy
@@ -15,7 +15,25 @@ Remplacer Terraform par un opérateur Kubernetes natif comme mécanisme de gesti
 
 ## Pour qui
 
-**Principale cible :** Ops/platform engineers responsables de l'infrastructure Scaleway — ils confient à l'opérateur la gestion déclarative des ressources cloud depuis leur cluster, sans toolchain séparée ni gestion manuelle d'état.
+**Cible principale :** Ops/platform engineers responsables de l'infrastructure Scaleway — ils confient à l'opérateur la gestion déclarative des ressources cloud depuis leur cluster, sans toolchain séparée ni gestion manuelle d'état.
+
+**Cible secondaire (mainteneur) :** développeur solo travaillant en mode IA-assisté agentique. Le projet sert simultanément de produit opérateur production-ready et de terrain d'expérimentation pour valider des pratiques de développement IA-assisté sur du code Rust système (kube-rs, async, observabilité).
+
+## Méthode
+
+Le projet est développé en solo, en mode IA-assisté agentique. Cette contrainte structurante définit trois principes opérationnels.
+
+### Flexibilité contrôlée
+
+Le domaine IA évolue rapidement ; le projet doit pouvoir pivoter d'outillage, de framework ou de pratique sans dette technique paralysante. Investir sur les intégrations IA, mais avec mesure — privilégier les outils débrayables, testés en isolation avant adoption systémique.
+
+### Décisions structurelles = normes
+
+Une fois qu'une décision d'architecture, d'organisation ou d'outillage est prise, elle devient la convention par défaut. En changer (ou seulement le proposer) demande de produire des indicateurs SMART démontrant la nécessité, pas une simple préférence.
+
+### Traçabilité native GitHub
+
+Le quatuor « où on va / comment / à quel rythme / à quel coût » est répondu par les primitives GitHub : `STRATEGY.md` (où), issues + sub-issues + Project v2 (comment), Project Status (rythme), champ Tokens (coût). Pas de planification hors-bande.
 
 ## Métriques clés
 
@@ -38,7 +56,7 @@ Garantir un opérateur robuste et pérenne qui facilite le diagnostic des probl�
 
 _Lien avec l'approche :_ Un opérateur peu fiable invalide le pari central — les équipes reviendraient à Terraform faute de pouvoir faire confiance à la réconciliation.
 
-### Expérience développeur
+### Extensibilité
 
 Permettre aux équipes de contribuer et d'étendre l'opérateur facilement.
 
@@ -49,3 +67,9 @@ _Lien avec l'approche :_ L'extensibilité native de Kubernetes n'a de valeur que
 Rendre l'opérateur opérationnel en moins de 20 minutes.
 
 _Lien avec l'approche :_ Si l'onboarding est long ou opaque, les équipes n'adoptent pas l'opérateur et restent sur leurs pratiques existantes.
+
+### Outillage IA agentique
+
+Maintenir et faire évoluer l'outillage qui permet le développement IA-assisté du projet : hooks Claude Code (MemPalace, RTK), intégrations Compound Engineering, conventions de prompt et de mémoire, automatismes de traçabilité Project v2.
+
+_Lien avec l'approche :_ La contrainte solo + IA est l'enabler du projet. Sans outillage adapté, l'investissement par feature explose et le projet n'est plus viable. Cet axe est l'infrastructure invisible qui rend les 4 autres réalisables.

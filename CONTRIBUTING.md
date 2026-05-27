@@ -113,17 +113,42 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 1. Vérifiez que le bug n'existe pas déjà dans les issues
 2. Ouvrez une issue avec : description claire, étapes de reproduction, comportement attendu vs actuel, version de l'opérateur et de Kubernetes
 
+## Roadmap
+
+Le [Project v2](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
+Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
+
 ## Proposer une fonctionnalité
 
 1. Ouvrez une issue avec le label `enhancement`
 2. Décrivez le cas d'usage et proposez une solution
+3. Pour une fonctionnalité non triviale, décomposez-la en sous-issues natives (sub-issues) — une par unité d'implémentation cohérente, nommées `U1`, `U2`, etc.
+
+### Décomposition en sub-issues
+
+Le pattern standard pour une feature est :
+
+```
+#N  feat: titre parent (issue parente, pas de PR directe)
+├── #N+1  feat(scope): U1 — première unité
+├── #N+2  feat(scope): U2 — deuxième unité
+└── ...
+```
+
+Les sub-issues s'ajoutent via l'UI GitHub (bouton "Create sub-issue" sur l'issue parente) ou via l'API :
+
+```bash
+gh api repos/mathieubodin/scaleway-operator/issues/<parent>/sub_issues \
+  --method POST -f sub_issue_id=<child_number>
+```
 
 ## Soumettre une PR
 
 1. **Fork** le dépôt
 2. **Créez une branche** (`git checkout -b feat/ma-fonctionnalite`)
 3. **Committez** en conventional commits (`feat(scope): description`)
-4. **Poussez** votre branche et **ouvrez une PR** avec une description claire
+4. **Référencez l'issue** dans le corps de la PR avec `Closes #N` (met à jour le Status automatiquement)
+5. **Poussez** votre branche et **ouvrez une PR** avec une description claire
 
 **Checklist avant de soumettre :**
 
@@ -132,6 +157,18 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 - [ ] `make test-integration-kind` passe
 - [ ] `make generate-crds` relancé si `src/resources.rs` modifié
 - [ ] Documentation à jour
+
+### Convention `/cost N`
+
+Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implémenter :
+
+```
+/cost 12500
+```
+
+Le chiffre doit être un entier sans séparateur de milliers, en début de ligne.
+Ce commentaire met à jour automatiquement le champ **Tokens** du Project v2 pour chaque issue liée via `Closes/Fixes/Resolves`.
+Si vous commentez plusieurs fois, le dernier `/cost` prévaut.
 
 ## Style de code
 
