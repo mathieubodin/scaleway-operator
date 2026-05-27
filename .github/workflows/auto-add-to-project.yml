@@ -4,7 +4,7 @@ on:
   issues:
     types: [opened, reopened]
 
-# Requiert le secret PROJECT_TOKEN — un fine-grained PAT avec:
+# Requiert le secret GH_PROJECT_TOKEN — un fine-grained PAT avec:
 #   - Repository access: scaleway-operator
 #   - Repository permissions: Issues (Read)
 #   - User permissions: Projects (Read and write)
@@ -20,4 +20,4 @@ jobs:
         uses: actions/add-to-project@244f685bbc3b7adfa8466e08b698b5577571133e  # v1.0.2
         with:
           project-url: https://github.com/users/mathieubodin/projects/2
-          github-token: ${{ secrets.PROJECT_TOKEN }}
+          github-token: ${{ secrets.GH_PROJECT_TOKEN }}

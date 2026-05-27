@@ -9,7 +9,7 @@ on:
 #   - PR mergée                 → Status: Done
 #   - PR fermée non mergée      → aucun changement (l'issue reste où elle était)
 #
-# Requiert le secret PROJECT_TOKEN — fine-grained PAT avec :
+# Requiert le secret GH_PROJECT_TOKEN — fine-grained PAT avec :
 #   - Repository permissions: Pull requests (Read), Issues (Read)
 #   - User permissions: Projects (Read and write)
 
@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
     env:
-      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
       PROJECT_ID: PVT_kwHOAAJUjc4BYpzh
       STATUS_FIELD_ID: PVTSSF_lAHOAAJUjc4BYpzhzhTuEok
       OPTION_REVIEW: 86a38049
@@ -29,10 +29,10 @@ jobs:
         id: token
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::PROJECT_TOKEN secret not configured — workflow skipped."
+            echo "::warning::GH_PROJECT_TOKEN secret not configured — workflow skipped."
             echo "available=false" >> "$GITHUB_OUTPUT"
           elif ! gh api user --silent 2>/dev/null; then
-            echo "::error::PROJECT_TOKEN is expired or invalid — renew the PAT and update the Actions secret."
+            echo "::error::GH_PROJECT_TOKEN is expired or invalid — renew the PAT and update the Actions secret."
             exit 1
           else
             echo "available=true" >> "$GITHUB_OUTPUT"

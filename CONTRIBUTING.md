@@ -118,9 +118,9 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 Le [Project v2](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
 Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
 
-### Configurer le secret `PROJECT_TOKEN`
+### Configurer le secret `GH_PROJECT_TOKEN`
 
-Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `parse-cost-comment`) requièrent un fine-grained PAT stocké comme secret `PROJECT_TOKEN`.
+Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `parse-cost-comment`) requièrent un fine-grained PAT stocké comme secret `GH_PROJECT_TOKEN`.
 
 **1. Créer le PAT** — les fine-grained PATs ne supportent pas encore les projets personnels (user-owned). Utiliser un **classic PAT** : [github.com/settings/tokens/new](https://github.com/settings/tokens/new) :
 
@@ -134,7 +134,7 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 
 | Champ | Valeur |
 | --- | --- |
-| Name | `PROJECT_TOKEN` |
+| Name | `GH_PROJECT_TOKEN` |
 | Secret | valeur du PAT généré |
 
 **Comportement selon l'état du secret :**
@@ -144,7 +144,7 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 | Secret absent | Warning silencieux, workflow skippé — aucun check ne bloque |
 | Token expiré ou invalide | Erreur visible + check en échec — GitHub notifie le mainteneur |
 
-**Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
+**Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `GH_PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
 
 ## Proposer une fonctionnalité
 
