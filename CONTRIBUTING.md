@@ -137,9 +137,14 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 | Name | `PROJECT_TOKEN` |
 | Secret | valeur du PAT généré |
 
-Sans ce secret, les workflows s'arrêtent proprement avec un warning — aucun check ne bloque.
+**Comportement selon l'état du secret :**
 
-**Renouvellement** : si le PAT expire, les workflows se dégradent silencieusement (warning). Pour renouveler : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
+| État | Comportement |
+| --- | --- |
+| Secret absent | Warning silencieux, workflow skippé — aucun check ne bloque |
+| Token expiré ou invalide | Erreur visible + check en échec — GitHub notifie le mainteneur |
+
+**Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
 
 ## Proposer une fonctionnalité
 
