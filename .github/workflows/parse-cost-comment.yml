@@ -27,7 +27,18 @@ jobs:
       PROJECT_ID: PVT_kwHOAAJUjc4BYpzh
       TOKENS_FIELD_ID: PVTF_lAHOAAJUjc4BYpzhzhT6_3I
     steps:
+      - name: Check token availability
+        id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::PROJECT_TOKEN secret not configured — workflow skipped."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Parse /cost <N> from comment
+        if: steps.token.outputs.available == 'true'
         id: parse
         run: |
           # Regex : /cost suivi d'un ou plusieurs digits, en début de ligne (autorise espaces)
@@ -44,7 +55,7 @@ jobs:
           fi
 
       - name: Fetch linked issues from PR
-        if: steps.parse.outputs.value != ''
+        if: steps.token.outputs.available == 'true' && steps.parse.outputs.value != ''
         id: linked
         run: |
           pr_number=${{ github.event.issue.number }}
@@ -62,7 +73,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Update Tokens for each linked issue
-        if: steps.parse.outputs.value != '' && steps.linked.outputs.issues != ''
+        if: steps.token.outputs.available == 'true' && steps.parse.outputs.value != '' && steps.linked.outputs.issues != ''
         run: |
           while IFS=$'\t' read -r number issue_node_id; do
             [ -z "$number" ] && continue

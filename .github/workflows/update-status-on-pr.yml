@@ -25,7 +25,18 @@ jobs:
       OPTION_REVIEW: 86a38049
       OPTION_DONE: 98236657
     steps:
+      - name: Check token availability
+        id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::PROJECT_TOKEN secret not configured — workflow skipped."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine target Status
+        if: steps.token.outputs.available == 'true'
         id: target
         run: |
           if [ "${{ github.event.action }}" = "closed" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
@@ -41,11 +52,11 @@ jobs:
           echo "Target Status: $(grep '^label=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
 
       - name: Skip if no transition
-        if: steps.target.outputs.option_id == ''
+        if: steps.token.outputs.available == 'true' && steps.target.outputs.option_id == ''
         run: echo "No Status transition for action=${{ github.event.action }} merged=${{ github.event.pull_request.merged }} — exiting."
 
       - name: Fetch linked issues
-        if: steps.target.outputs.option_id != ''
+        if: steps.token.outputs.available == 'true' && steps.target.outputs.option_id != ''
         id: linked
         run: |
           issues=$(gh pr view ${{ github.event.pull_request.number }} \
@@ -62,7 +73,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Update each linked issue Status
-        if: steps.target.outputs.option_id != '' && steps.linked.outputs.issues != ''
+        if: steps.token.outputs.available == 'true' && steps.target.outputs.option_id != '' && steps.linked.outputs.issues != ''
         run: |
           while IFS=$'\t' read -r number issue_node_id; do
             [ -z "$number" ] && continue
