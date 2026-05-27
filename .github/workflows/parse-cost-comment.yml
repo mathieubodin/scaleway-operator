@@ -1,0 +1,118 @@
+name: Parse /cost comment and update Tokens field
+
+on:
+  issue_comment:
+    types: [created]
+
+# Convention "option A" du tracking tokens :
+#   - À la fin d'une PR (avant merge), commenter `/cost <N>` (entier, sans séparateur de milliers)
+#   - Met à jour le champ `Tokens` du Project v2 #2 pour chaque issue liée à la PR (via Closes/Fixes/Resolves)
+#   - Plusieurs `/cost` sur la même PR : le DERNIER prévaut (override, pas cumul)
+#
+# Évalué après 2-3 mois de données pour décider d'activer l'option B (#45 — hook auto Claude Code).
+#
+# Requiert le secret GH_PROJECT_TOKEN — fine-grained PAT avec :
+#   - Repository permissions: Pull requests (Read), Issues (Read)
+#   - User permissions: Projects (Read and write)
+
+jobs:
+  parse-cost:
+    # Filtre 1 : seulement les commentaires sur PR (issue_comment fires pour issues ET PRs)
+    if: github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+      PROJECT_ID: PVT_kwHOAAJUjc4BYpzh
+      TOKENS_FIELD_ID: PVTF_lAHOAAJUjc4BYpzhzhT6_3I
+    steps:
+      - name: Check token availability
+        id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::GH_PROJECT_TOKEN secret not configured — workflow skipped."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          elif ! gh api user --silent 2>/dev/null; then
+            echo "::error::GH_PROJECT_TOKEN is expired or invalid — renew the PAT and update the Actions secret."
+            exit 1
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Parse /cost <N> from comment
+        if: steps.token.outputs.available == 'true'
+        id: parse
+        run: |
+          # Regex : /cost suivi d'un ou plusieurs digits, en début de ligne (autorise espaces)
+          # Exemples acceptés : "/cost 12500", "  /cost 47000"
+          # Exemples rejetés  : "I think /cost 12500", "cost 12500" (sans /)
+          body=$(jq -r '.comment.body' < "$GITHUB_EVENT_PATH")
+          value=$(echo "$body" | grep -oE '^[[:space:]]*/cost[[:space:]]+[0-9]+' | head -1 | grep -oE '[0-9]+$')
+          if [ -z "$value" ]; then
+            echo "No /cost <N> pattern matched in comment body — exiting."
+            echo "value=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Parsed cost value: $value"
+            echo "value=$value" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch linked issues from PR
+        if: steps.token.outputs.available == 'true' && steps.parse.outputs.value != ''
+        id: linked
+        run: |
+          pr_number=${{ github.event.issue.number }}
+          issues=$(gh pr view "$pr_number" \
+            --repo ${{ github.repository }} \
+            --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[] | "\(.number)\t\(.id)"')
+          if [ -z "$issues" ]; then
+            echo "No closing issues found on PR #${pr_number} — /cost has no target."
+          fi
+          {
+            echo 'issues<<EOF'
+            echo "$issues"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update Tokens for each linked issue
+        if: steps.token.outputs.available == 'true' && steps.parse.outputs.value != '' && steps.linked.outputs.issues != ''
+        run: |
+          while IFS=$'\t' read -r number issue_node_id; do
+            [ -z "$number" ] && continue
+            echo "→ Issue #${number} Tokens = ${{ steps.parse.outputs.value }}"
+
+            # 1. Ensure item is in Project (idempotent)
+            item_id=$(gh api graphql -f query='
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                  item { id }
+                }
+              }' -f projectId="$PROJECT_ID" -f contentId="$issue_node_id" \
+              --jq '.data.addProjectV2ItemById.item.id')
+
+            if [ -z "$item_id" ] || [ "$item_id" = "null" ]; then
+              echo "  ✗ Could not add/find item for issue #${number} — skipping"
+              continue
+            fi
+
+            # 2. Update Tokens number field
+            gh api graphql -f query='
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $tokens: Float!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { number: $tokens }
+                }) {
+                  projectV2Item { id }
+                }
+              }' \
+              -f projectId="$PROJECT_ID" \
+              -f itemId="$item_id" \
+              -f fieldId="$TOKENS_FIELD_ID" \
+              -F tokens="${{ steps.parse.outputs.value }}" \
+              --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id'
+
+            echo "  ✓ Updated"
+          done <<< "${{ steps.linked.outputs.issues }}"
