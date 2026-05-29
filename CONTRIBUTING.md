@@ -52,7 +52,6 @@ Utiliser `make` comme point d'entrée unique (`make help` pour la liste complèt
 | `make deploy-status` | Affiche l'état du déploiement |
 | `make clean` | Nettoie les artefacts |
 
-
 ### Tests d'intégration
 
 Les tests vérifient `reconcile_instance` contre un vrai API server Kubernetes, avec l'API Scaleway mockée via mockito — aucune credential Scaleway réelle requise.
@@ -145,6 +144,82 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 | Token expiré ou invalide | Erreur visible + check en échec — GitHub notifie le mainteneur |
 
 **Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `GH_PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
+
+### Configurer l'identité agent `agentic-assistant-1`
+
+L'App GitHub `agentic-assistant-1` donne à Claude Code une identité `[bot]` traçable sur les issues, PRs, commentaires et commits. Cette configuration est locale à chaque machine — elle ne touche pas les commandes `gh` et `git` du mainteneur tapées directement dans le terminal.
+
+#### 1. Créer l'App GitHub
+
+Aller sur [github.com/settings/apps/new](https://github.com/settings/apps/new) :
+
+| Champ | Valeur |
+| --- | --- |
+| GitHub App name | `agentic-assistant-1` |
+| Homepage URL | `https://github.com/mathieubodin` |
+| Webhook — Active | décocher |
+| Request user authorization (OAuth) | décocher |
+| Enable Device Flow | décocher |
+
+**Permissions du dépôt :**
+
+| Permission | Niveau |
+| --- | --- |
+| Issues | Read and write |
+| Metadata | Read-only (obligatoire) |
+| Pull requests | Read and write |
+| Tout le reste | No access |
+
+**Where can this GitHub App be installed?** → `Only on this account`
+
+Soumettre, puis sur la page de l'App créée :
+
+- Noter l'**App ID** (visible en haut de page)
+- Cliquer **Generate a private key** → télécharge un fichier `.pem`
+
+#### 2. Installer l'App sur les dépôts
+
+Aller dans [Settings → Applications → Installations](https://github.com/settings/apps/agentic-assistant-1/installations) → **Install** → sélectionner `mathieubodin` → choisir les dépôts souhaités.
+
+Après installation, l'URL de la page contient l'**Installation ID** :
+`https://github.com/settings/installations/<INSTALLATION_ID>`
+
+#### 3. Stocker les credentials
+
+```bash
+mkdir -p ~/.config/gh-apps
+mv /chemin/vers/agentic-assistant-1.*.pem ~/.config/gh-apps/agentic-assistant-1.pem
+chmod 600 ~/.config/gh-apps/agentic-assistant-1.pem
+
+cat > ~/.config/gh-apps/agentic-assistant-1.env << 'EOF'
+APP_ID=<app_id>
+INSTALLATION_ID=<installation_id>
+EOF
+chmod 600 ~/.config/gh-apps/agentic-assistant-1.env
+```
+
+#### 4. Lancer le script de setup
+
+Depuis la racine du dépôt :
+
+```bash
+bash scripts/setup-agent-identity.sh
+```
+
+Le script vérifie les prérequis, installe l'extension `gh-token` si nécessaire, récupère le `BOT_USER_ID`, et enregistre le hook dans `.claude/settings.local.json`.
+
+**Comportement selon l'état de la configuration :**
+
+| État | Comportement |
+| --- | --- |
+| `~/.config/gh-apps/agentic-assistant-1.env` absent | Hook inactif — Claude Code opère sous l'identité du mainteneur |
+| Configuration présente | `GH_TOKEN` App injecté sur toutes les commandes `gh`, `GIT_AUTHOR_*` sur tous les `git commit` |
+
+**Projects v2** : les mutations GraphQL Projects v2 ne sont pas accessibles via les tokens d'App (restriction GitHub). Elles doivent toujours être préfixées explicitement :
+
+```bash
+GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
+```
 
 ## Proposer une fonctionnalité
 
