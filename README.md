@@ -54,7 +54,7 @@ Ces valeurs sont des UUIDs distincts — le token IAM n'est pas l'org UUID.
 ```bash
 helm upgrade scaleway-operator-crds \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator-crds \
-    --version 0.1.9 \
+    --version 0.1.10 \
     --namespace scaleway-system \
     --create-namespace \
     --install  # crds
@@ -80,7 +80,7 @@ Les variables `$MY_SCW_TOKEN` et `$MY_SCW_ORG_ID` doivent être définies dans v
 ```bash
 helm upgrade scaleway-operator \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator \
-    --version 0.1.8 \
+    --version 0.1.9 \
     --namespace scaleway-system \
     --install \
     --set scaleway.existingSecret=scaleway-credentials  # operator
