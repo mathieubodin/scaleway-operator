@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.10](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.9...scaleway-operator-v0.1.10) (2026-05-29)
+
+
+### Features
+
+* **ops:** add agentic-assistant-1 GitHub App identity for Claude Code ([#88](https://github.com/mathieubodin/scaleway-operator/issues/88)) ([8135d48](https://github.com/mathieubodin/scaleway-operator/commit/8135d4805613dc24a9d52ba96e60e3266a8394c6))
+* **ops:** setup GitHub Project v2 roadmap traceability ([#87](https://github.com/mathieubodin/scaleway-operator/issues/87)) ([b6d1b8c](https://github.com/mathieubodin/scaleway-operator/commit/b6d1b8cc2ff68e0455703fb7f208d7c460573b2f))
+
+
+### Bug Fixes
+
+* **lint:** remove dead code and needless returns in reconcilers ([#49](https://github.com/mathieubodin/scaleway-operator/issues/49)) ([0b57f40](https://github.com/mathieubodin/scaleway-operator/commit/0b57f404cf98a3194f55ad8ecaa0d9093e06b8e2))
+
 ## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-22)
 
 ### Features
