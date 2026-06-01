@@ -82,3 +82,28 @@ Chaque namespace hébergeant des `Instance` doit avoir :
 ### Documentation
 
 `docs/solutions/` — solutions documentées à des problèmes passés (patterns architecturaux, bugs, conventions), organisées par catégorie avec frontmatter YAML (`module`, `tags`, `problem_type`). Utile lors de l'implémentation ou du débogage dans des zones déjà documentées.
+
+## GitHub Project v2
+
+Project board : <https://github.com/users/mathieubodin/projects/2>
+
+**Champs obligatoires à renseigner à la création d'une issue :**
+
+| Champ | Type | Valeurs |
+| --- | --- | --- |
+| `Axis` | Single-select | Couverture API / Fiabilité / Extensibilité / Mise en place et documentation / Outillage IA agentique |
+| `Priority` | Single-select | P0 → P3 |
+| `Effort` | Single-select | à définir |
+| `Status` | Single-select | Backlog / Planned / In Progress / Review / Done |
+
+**Workflows actifs (automatiques) :**
+
+- `auto-add-to-project.yml` — toute nouvelle issue est ajoutée au board sans action manuelle
+- `update-status-on-pr.yml` — PR avec `Closes #N` → Status=Review à l'ouverture, Done au merge
+- `parse-cost-comment.yml` — commentaire `/cost N` sur une PR met à jour le champ Tokens de l'issue liée
+
+**Mutations Projects v2 :** toujours préfixer `GH_TOKEN=$GH_PROJECT_TOKEN` — le token d'App ne peut pas accéder aux Projects v2 user-owned.
+
+**Pattern d'issues :** toute feature crée une issue parent + sub-issues par unité d'implémentation (U1…Un).
+
+**Composition de milestone :** l'agent lit le Backlog Project v2, respecte les dépendances parent/sous-issue, propose P0+P1 par défaut — le maintainer valide avant création.
