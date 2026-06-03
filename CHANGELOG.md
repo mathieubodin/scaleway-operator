@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.10...scaleway-operator-v0.1.11) (2026-06-03)
+
+
+### Features
+
+* **coverage:** add coverage-kind targets merging unit and integration tests ([b5e09af](https://github.com/mathieubodin/scaleway-operator/commit/b5e09af3fe1a2ca6ad527c89024a480f2c202fe6))
+
+
+### Bug Fixes
+
+* **chart:** restore LoadBalancer CRD template to scaleway-operator-crds ([cab35cf](https://github.com/mathieubodin/scaleway-operator/commit/cab35cf7594182baa875d253eec5b6fa452b0289))
+* **tests:** remove unused fresh_circuit_breaker helper and unused mut ([b5e09af](https://github.com/mathieubodin/scaleway-operator/commit/b5e09af3fe1a2ca6ad527c89024a480f2c202fe6))
+* **tests:** skip unimplemented LB lifecycle test in kind and fix ignore messages ([88f2991](https://github.com/mathieubodin/scaleway-operator/commit/88f299184e6ecfaf1b92e2e38554d200699827e2))
+
+
+### Documentation
+
+* **coverage:** add compound solution for coverage-kind integration workflow ([6867c2b](https://github.com/mathieubodin/scaleway-operator/commit/6867c2b56a0adac9959d3ef9476c1e4720273b8f))
+
 ## [0.1.10](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.9...scaleway-operator-v0.1.10) (2026-05-29)
 
 

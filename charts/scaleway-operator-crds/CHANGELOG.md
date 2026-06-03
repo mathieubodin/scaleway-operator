@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.10...scaleway-operator-crds-v0.1.11) (2026-06-03)
+
+
+### Bug Fixes
+
+* **chart:** restore LoadBalancer CRD template to scaleway-operator-crds ([cab35cf](https://github.com/mathieubodin/scaleway-operator/commit/cab35cf7594182baa875d253eec5b6fa452b0289))
+
 ## [0.1.10](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.9...scaleway-operator-crds-v0.1.10) (2026-05-29)
 
 
