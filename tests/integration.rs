@@ -584,7 +584,7 @@ fn build_load_balancer(ns: &str, name: &str) -> LoadBalancer {
 #[ignore = "requires make test-integration-kind"]
 async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
     let fixture = TestFixture::for_namespace(NS_EDITOR).await;
-    let mut server = mockito::Server::new_async().await;
+    let server = mockito::Server::new_async().await;
 
     // Mock NamespaceRole lookup (handled by kube API, not mocked here)
     // The reconciler should add the finalizer on the first reconcile cycle.

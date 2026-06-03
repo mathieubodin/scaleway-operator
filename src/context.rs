@@ -154,10 +154,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn fresh_circuit_breaker() -> Mutex<CircuitBreakerState> {
-        Mutex::new(CircuitBreakerState::Closed { failure_count: 0 })
-    }
-
     // Circuit breaker tests operate only on Mutex<CircuitBreakerState> — no kube::Client needed.
     // We use a standalone struct rather than a full Context to avoid tokio runtime requirements.
 
