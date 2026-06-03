@@ -23,7 +23,7 @@ echo "--- Création du cluster kind ${CLUSTER_NAME} ---"
 kind create cluster --name "$CLUSTER_NAME" --kubeconfig "$KIND_KUBECONFIG"
 
 echo "--- Déploiement des CRDs (v${CHART_CRDS_VERSION}) ---"
-helm package charts/scaleway-operator-crds/ --destination target/charts/ --quiet
+helm package charts/scaleway-operator-crds/ --destination target/charts/
 helm upgrade --install scaleway-operator-crds \
     "target/charts/scaleway-operator-crds-${CHART_CRDS_VERSION}.tgz" \
     --kubeconfig "$KIND_KUBECONFIG" \
@@ -35,4 +35,4 @@ echo "--- Application des fixtures de test ---"
 kubectl --kubeconfig="$KIND_KUBECONFIG" apply -f k8s/test-fixtures.yaml
 
 echo "--- Exécution des tests d'intégration ---"
-KUBECONFIG="$KIND_KUBECONFIG" cargo test --test integration -- --ignored
+KUBECONFIG="$KIND_KUBECONFIG" cargo test --test integration -- --ignored --skip test_loadbalancer_create_sync_delete

@@ -169,7 +169,7 @@ impl TestFixture {
 // ── U4 : prérequis Kubernetes manquants ──────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_missing_namespace_role_returns_config_error() {
     let server = mockito::Server::new_async().await;
     let fixture = TestFixture::for_namespace(NS_NO_ROLE).await;
@@ -190,7 +190,7 @@ async fn test_missing_namespace_role_returns_config_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_missing_project_id_annotation_returns_config_error() {
     let server = mockito::Server::new_async().await;
     let fixture = TestFixture::for_namespace(NS_NO_ANNOTATION).await;
@@ -212,7 +212,7 @@ async fn test_missing_project_id_annotation_returns_config_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_invalid_uuid_annotation_returns_config_error() {
     let server = mockito::Server::new_async().await;
     let fixture = TestFixture::for_namespace(NS_INVALID_UUID).await;
@@ -233,7 +233,7 @@ async fn test_invalid_uuid_annotation_returns_config_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_missing_iam_secret_returns_config_error() {
     // Finalizer pré-présent obligatoire : l'étape 4 requeue sinon et n'atteint jamais l'étape 6
     let server = mockito::Server::new_async().await;
@@ -256,7 +256,7 @@ async fn test_missing_iam_secret_returns_config_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_viewer_role_cannot_create_instance() {
     // Finalizer pré-présent obligatoire pour atteindre l'étape 8 (vérification read-only)
     // Pas de mock Scaleway : le réconciliateur retourne Err avant verify_project_access
@@ -277,7 +277,7 @@ async fn test_viewer_role_cannot_create_instance() {
 // ── U5 : lifecycle du finalizer ───────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_finalizer_added_on_first_reconcile() {
     // Aucun mock Scaleway — le réconciliateur retourne à l'étape 4 avant les appels réseau
     let server = mockito::Server::new_async().await;
@@ -309,7 +309,7 @@ async fn test_finalizer_added_on_first_reconcile() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_deletion_with_scaleway_id_calls_delete_api() {
     // handle_deletion utilise ctx.scaleway_client — mock sur le même server que fixture.ctx()
     let mut server = mockito::Server::new_async().await;
@@ -352,7 +352,7 @@ async fn test_deletion_with_scaleway_id_calls_delete_api() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_deletion_without_scaleway_id_removes_finalizer_only() {
     // Pas d'appel Scaleway — scaleway_id absent
     let server = mockito::Server::new_async().await;
@@ -384,7 +384,7 @@ async fn test_deletion_without_scaleway_id_removes_finalizer_only() {
 // ── U6 : création et synchronisation d'instance ───────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_create_instance_writes_scaleway_id_to_status() {
     let mut server = mockito::Server::new_async().await;
     server
@@ -435,7 +435,7 @@ async fn test_create_instance_writes_scaleway_id_to_status() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_orphan_adoption_does_not_call_create() {
     let mut server = mockito::Server::new_async().await;
     server
@@ -479,7 +479,7 @@ async fn test_orphan_adoption_does_not_call_create() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_sync_updates_state_and_public_ip() {
     let mut server = mockito::Server::new_async().await;
     server
@@ -520,7 +520,7 @@ async fn test_sync_updates_state_and_public_ip() {
 }
 
 #[tokio::test]
-#[ignore = "requires: make deploy-crd && make deploy-test-fixtures && kubectl proxy"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_scaleway_error_sets_sync_state_error() {
     let mut server = mockito::Server::new_async().await;
     server
@@ -581,7 +581,7 @@ fn build_load_balancer(ns: &str, name: &str) -> LoadBalancer {
 }
 
 #[tokio::test]
-#[ignore = "requires kubectl proxy :8001 and make deploy-test-fixtures"]
+#[ignore = "requires make test-integration-kind"]
 async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
     let fixture = TestFixture::for_namespace(NS_EDITOR).await;
     let mut server = mockito::Server::new_async().await;
@@ -627,7 +627,7 @@ async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
 }
 
 #[tokio::test]
-#[ignore = "requires kubectl proxy :8001, make deploy-test-fixtures, and valid Scaleway credentials"]
+#[ignore = "not yet implemented — requires live Scaleway credentials with LB permissions"]
 async fn test_loadbalancer_create_sync_delete() {
     // Full lifecycle test: apply CR → observe scaleway_id → delete CR → observe finalizer removal.
     // This test requires valid Scaleway credentials in the scaleway-ns-creds-scw-test-editor secret.
