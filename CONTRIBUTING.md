@@ -266,6 +266,8 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 > **Règle des axes** : l'axe informe uniquement le nommage — il ne contraint pas la sélection. Une issue d'un axe minoritaire peut être incluse.
 
+> **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
+
 > **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
 
 ## Proposer une fonctionnalité
