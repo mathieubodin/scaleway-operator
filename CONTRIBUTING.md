@@ -221,7 +221,7 @@ Le script vérifie les prérequis, installe l'extension `gh-token` si nécessair
 GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 ```
 
-### Project v2 Field IDs
+### Project Field IDs
 
 Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de préparation de milestone pour filtrer les issues via GraphQL.
 
