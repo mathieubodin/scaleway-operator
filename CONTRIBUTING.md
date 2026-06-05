@@ -290,8 +290,20 @@ Le pattern standard pour une feature est :
 Les sub-issues s'ajoutent via l'UI GitHub (bouton "Create sub-issue" sur l'issue parente) ou via l'API :
 
 ```bash
+# L'API attend le database ID (`.id`), pas le numéro d'issue
+child_db_id=$(gh api repos/mathieubodin/scaleway-operator/issues/<child_number> --jq '.id')
 gh api repos/mathieubodin/scaleway-operator/issues/<parent>/sub_issues \
-  --method POST -f sub_issue_id=<child_number>
+  --method POST -F sub_issue_id=$child_db_id
+```
+
+Pour attacher plusieurs sous-issues en une passe :
+
+```bash
+for n in <U1> <U2> <U3>; do
+  db_id=$(gh api repos/mathieubodin/scaleway-operator/issues/$n --jq '.id')
+  gh api repos/mathieubodin/scaleway-operator/issues/<parent>/sub_issues \
+    --method POST -F sub_issue_id=$db_id --silent && echo "#$n ✓"
+done
 ```
 
 ## Soumettre une PR
