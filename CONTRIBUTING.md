@@ -221,6 +221,55 @@ Le script vérifie les prérequis, installe l'extension `gh-token` si nécessair
 GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 ```
 
+### Project Field IDs
+
+Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de préparation de milestone pour filtrer les issues via GraphQL.
+
+| Champ | Field ID | Options disponibles |
+| --- | --- | --- |
+| Status | `PVTSSF_lAHOAAJUjc4BYpzhzhTuEok` | `f75ad846` Backlog · `6c3180a2` Planned · `47fc9ee4` In Progress · `86a38049` Review · `98236657` Done |
+| Axis | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_28` | `2b5337ce` Couverture API Scaleway · `2de5cc1d` Fiabilité de l'opérateur · `7682f8cd` Extensibilité · `ad58ffc2` Mise en place et documentation · `baa066a1` Outillage IA agentique |
+| Priority | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3A` | `43a64d76` P0 · `1ba4b43d` P1 · `774f2cde` P2 · `7e16a61a` P3 |
+| Effort | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3E` | `866f0c5e` S · `6a811477` M · `55fdce43` L · `d4427b50` XL |
+| Milestone | `PVTF_lAHOAAJUjc4BYpzhzhTuEow` | champ natif GitHub — auto-propagé à l'assignation d'une issue à un milestone |
+
+**PROJECT_ID** : `PVT_kwHOAAJUjc4BYpzh`
+
+### Process de préparation de milestone
+
+Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent, sans date d'échéance, terminé quand les issues sont fermées. La composition est toujours validée par le mainteneur avant création.
+
+#### Déclenchement
+
+- **À partir du 2e milestone** : le workflow `on-milestone-closed.yml` crée automatiquement une issue `chore: préparer milestone M<N>` à la fermeture du milestone précédent.
+- **Bootstrap M1** : sans milestone précédent, ouvrir une session Claude Code et demander explicitement `prépare le milestone M1`.
+
+#### Convention de nommage
+
+`M<N> — <Axe dominant>` — N est le prochain numéro séquentiel (tous états confondus), l'axe dominant est l'axe le plus fréquent parmi les issues sélectionnées (tie → ordre alphabétique).
+
+#### Instructions de session pour l'agent (F2)
+
+1. **Lire le Backlog** depuis Project v2 via GraphQL (`PVT_kwHOAAJUjc4BYpzh`) :
+   issues avec `Status = Backlog` (`f75ad846`) non assignées à un milestone ouvert.
+   Par défaut : proposer uniquement P0 (`43a64d76`) et P1 (`1ba4b43d`).
+2. **Récupérer les sous-issues** : `GET /repos/mathieubodin/scaleway-operator/issues/{n}/sub_issues`
+3. **Construire l'ordre** : P0 > P1 > P2 > P3 ; au sein d'un groupe, parent avant ses sous-issues.
+4. **Présenter la proposition** avec colonnes : `#`, `Titre`, `Axe`, `Priorité`, `Effort`, `Raison`.
+5. **Attendre validation** du mainteneur (ajouts, retraits, réordonnancement).
+6. **Calculer N** : `gh api repos/mathieubodin/scaleway-operator/milestones --paginate --state all | jq '[.[].number] | if length == 0 then 0 else max end | . + 1'`
+7. **Calculer l'axe dominant** : axe le plus fréquent parmi les issues confirmées (tie → alphabétique).
+8. **Vérifier l'idempotence** : aucun milestone ouvert ne porte déjà le nom calculé.
+9. **Créer le milestone** : `gh api repos/mathieubodin/scaleway-operator/milestones --method POST -f title="M<N> — <Axe>"`
+10. **Assigner les issues** : `gh issue edit <n> --milestone "<titre>"` pour chaque issue confirmée.
+11. **Fermer l'issue de rappel** : `gh issue close <n>`.
+
+> **Règle des axes** : l'axe informe uniquement le nommage — il ne contraint pas la sélection. Une issue d'un axe minoritaire peut être incluse.
+
+> **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
+
+> **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
+
 ## Proposer une fonctionnalité
 
 1. Ouvrez une issue avec le label `enhancement`
