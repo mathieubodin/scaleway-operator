@@ -43,9 +43,13 @@ for hook in session-start-tokens.sh stop-tokens.sh; do
         printf "  ${RED}✗ Source absente : $src${NC}\n"
         exit 1
     fi
-    cp "$src" "$dest"
-    chmod +x "$dest"
-    printf "  ${GREEN}✓ $hook → $dest${NC}\n"
+    if cmp -s "$src" "$dest" 2>/dev/null; then
+        printf "  ${YELLOW}⚠ $hook inchangé — skip${NC}\n"
+    else
+        cp "$src" "$dest"
+        chmod +x "$dest"
+        printf "  ${GREEN}✓ $hook → $dest${NC}\n"
+    fi
 done
 
 # ---------------------------------------------------------------------------
@@ -63,8 +67,15 @@ fi
 cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak"
 printf "  Backup → ${SETTINGS_FILE}.bak\n"
 
+trap 'rm -f "${SETTINGS_FILE}.tmp"' EXIT
+
 SESSION_START_CMD="$HOOKS_DEST/session-start-tokens.sh"
 STOP_CMD="$HOOKS_DEST/stop-tokens.sh"
+
+# Dédupliquer les éventuelles entrées en double (idempotent)
+jq '.hooks.Stop = ((.hooks.Stop // []) | unique_by(.command // (.hooks[]?.command // "")))' \
+    "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
+    && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE" || true
 
 # Idempotent SessionStart entry
 if jq -e --arg cmd "$SESSION_START_CMD" \
@@ -80,9 +91,9 @@ else
     printf "  ${GREEN}✓ SessionStart enregistré${NC}\n"
 fi
 
-# Idempotent Stop entry
+# Idempotent Stop entry (vérifie les formats plat ET wrappé)
 if jq -e --arg cmd "$STOP_CMD" \
-    '(.hooks.Stop // []) | map(.command // "") | map(select(. == $cmd)) | length > 0' \
+    '(.hooks.Stop // []) | map((.command // ""), (.hooks[]?.command // "")) | map(select(. == $cmd)) | length > 0' \
     "$SETTINGS_FILE" >/dev/null 2>&1; then
     printf "  ${YELLOW}⚠ Stop déjà enregistré — skip${NC}\n"
 else

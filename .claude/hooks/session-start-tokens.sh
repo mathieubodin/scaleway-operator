@@ -17,6 +17,9 @@ fi
 tokens_session=$(cat "$GIT_DIR/claude_tokens_session" 2>/dev/null) || tokens_session=0
 tokens_last=$(cat "$GIT_DIR/claude_tokens_last_commit" 2>/dev/null) || tokens_last=0
 
+[[ "$tokens_session" =~ ^[0-9]+$ ]] || tokens_session=0
+[[ "$tokens_last"    =~ ^[0-9]+$ ]] || tokens_last=0
+
 carryover=$(( tokens_session - tokens_last ))
 [ "$carryover" -lt 0 ] && carryover=0
 

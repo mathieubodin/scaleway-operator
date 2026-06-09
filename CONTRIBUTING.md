@@ -246,8 +246,8 @@ Le script copie les hooks vers `~/.claude/hooks/`, les enregistre dans `~/.claud
 # Coût total en tokens d'une feature (tous les commits de la branche)
 git log --format='%(trailers:key=Claude-Tokens-Delta,valueonly)' | awk 'NF{s+=$1} END{print s}'
 
-# Coût par commit
-git log --format='%s  Delta=%(*trailers:key=Claude-Tokens-Delta,valueonly)s'
+# Coût par commit (sujet + delta)
+git log --format='%s%n%(trailers:key=Claude-Tokens-Delta,valueonly)'
 ```
 
 ### Project Field IDs
