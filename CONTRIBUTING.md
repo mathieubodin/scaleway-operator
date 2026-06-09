@@ -302,7 +302,7 @@ Pour attacher plusieurs sous-issues en une passe :
 for n in <U1> <U2> <U3>; do
   db_id=$(gh api repos/mathieubodin/scaleway-operator/issues/$n --jq '.id')
   gh api repos/mathieubodin/scaleway-operator/issues/<parent>/sub_issues \
-    --method POST -F sub_issue_id=$db_id --silent && echo "#$n ✓"
+    --method POST -F sub_issue_id=$db_id --silent && echo "#$n ✓" || echo "#$n ✗"
 done
 ```
 
