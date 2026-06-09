@@ -221,6 +221,35 @@ Le script vérifie les prérequis, installe l'extension `gh-token` si nécessair
 GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 ```
 
+### Token tracking git
+
+Chaque commit produit pendant une session Claude Code porte automatiquement trois trailers :
+
+```
+Claude-Session: 5db07156
+Claude-Tokens-Delta: 4200
+Claude-Tokens-Total: 18700
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+**Activation** — exécuter une fois après le clonage :
+
+```bash
+bash scripts/setup-dev.sh
+```
+
+Le script copie les hooks vers `~/.claude/hooks/`, les enregistre dans `~/.claude/settings.json`, et crée le symlink `.git/hooks/prepare-commit-msg`. Les hooks sont actifs au prochain démarrage de Claude Code.
+
+**Requêtes utiles :**
+
+```bash
+# Coût total en tokens d'une feature (tous les commits de la branche)
+git log --format='%(trailers:key=Claude-Tokens-Delta,valueonly)' | awk 'NF{s+=$1} END{print s}'
+
+# Coût par commit
+git log --format='%s  Delta=%(*trailers:key=Claude-Tokens-Delta,valueonly)s'
+```
+
 ### Project Field IDs
 
 Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de préparation de milestone pour filtrer les issues via GraphQL.
