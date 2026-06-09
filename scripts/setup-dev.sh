@@ -100,7 +100,7 @@ fi
 echo ""
 echo "4. Installation du hook git prepare-commit-msg..."
 
-HOOK_SRC="$REPO_ROOT/scripts/hooks/prepare-commit-msg"
+HOOK_SRC="$REPO_ROOT/.githooks/prepare-commit-msg"
 HOOK_DEST="$GIT_HOOKS_DIR/prepare-commit-msg"
 
 if [ ! -f "$HOOK_SRC" ]; then
