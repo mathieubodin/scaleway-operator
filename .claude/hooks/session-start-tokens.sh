@@ -25,3 +25,7 @@ carryover=$(( tokens_session - tokens_last ))
 
 printf '%s' "$session_id" > "$GIT_DIR/claude_session_id"
 printf '%d' "$carryover" > "$GIT_DIR/claude_tokens_carryover"
+# Nouvelle session : repartir d'une baseline vierge — le cumul de l'ancienne
+# session est entièrement capturé par le carryover ci-dessus.
+printf '0' > "$GIT_DIR/claude_tokens_session"
+printf '0' > "$GIT_DIR/claude_tokens_last_commit"

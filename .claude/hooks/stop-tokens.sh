@@ -5,7 +5,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 input=$(cat)
 
-if printf '%s' "$input" | jq -e '.stop_hook_active == false' >/dev/null 2>&1; then
+if printf '%s' "$input" | jq -e '.stop_hook_active == true' >/dev/null 2>&1; then
     exit 0
 fi
 
