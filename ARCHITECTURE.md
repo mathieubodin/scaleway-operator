@@ -4,7 +4,7 @@ Ce document est le point d'entrée pour contribuer à l'opérateur : il décrit 
 
 ## Vue d'ensemble des modules
 
-```
+```text
 main.rs          — Point d'entrée : initialise le Context, lance le Controller kube-rs et le serveur axum
 context.rs       — Struct Context partagé entre tous les réconciliateurs (client k8s, client Scaleway, métriques, backoff)
 resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, NamespaceRole
@@ -21,7 +21,7 @@ server.rs        — Serveur axum : /healthz, /readyz, /metrics, /log-level
 
 Les étapes dans `reconcile_instance_inner` :
 
-```
+```text
 1. deletion_timestamp ?  → handle_deletion (DELETE Scaleway + retrait finalizer)
 2. get NamespaceRole     → ConfigError (permanent) si absent
 3. get project-id        → ConfigError (permanent) si annotation absente ou UUID invalide
@@ -33,16 +33,18 @@ Les étapes dans `reconcile_instance_inner` :
 9. requeue 30s           → synchronisation périodique
 ```
 
-**Règle de mesure :** `ReconcileMeasurer` est créé via `ReconcileMeasurer::new(...)` en début de chemin et `set_outcome(...)` est appelé avant chaque retour. Le Drop enregistre durée + outcome dans Prometheus. Ne pas oublier le `set_outcome` — le measurer log un warn et enregistre `Error` par défaut.
+**Règle de mesure :** `ReconcileMeasurer` est créé via `ReconcileMeasurer::new(...)` en début de chemin et
+`set_outcome(...)` est appelé avant chaque retour. Le Drop enregistre durée + outcome dans Prometheus. Ne pas
+oublier le `set_outcome` — le measurer log un warn et enregistre `Error` par défaut.
 
 ## Gestion des erreurs
 
 `OperatorError` distingue deux catégories, traitées différemment dans `error_policy` :
 
-| Catégorie | Variants | Comportement |
-|-----------|----------|--------------|
-| **Permanente** | `ConfigError`, `InvalidZone`, `InvalidInstanceType`, `ProjectAccessDenied` | `Action::await_change()` — pas de retry, attend une modification du CR |
-| **Transitoire** | `ScalewayError`, `KubeError`, `NetworkError`, `Unknown` | Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max |
+|Catégorie|Variants|Comportement|
+|---|---|---|
+|**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `ProjectAccessDenied`|`Action::await_change()` — pas de retry, attend une modification du CR|
+|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
 
 **Règle :** une erreur est permanente si et seulement si un retry immédiat ne peut pas la résoudre — c'est-à-dire si elle nécessite une action de l'utilisateur (corriger le spec, créer une ressource manquante).
 

@@ -35,7 +35,7 @@ dans les rapports.
 
 `cargo llvm-cov` supporte un workflow en deux passes avec `--no-report` :
 
-```
+```bash
 # Passe 1 — tests unitaires instrumentés (accumule les profraw, pas de rapport)
 cargo llvm-cov --no-report --lib --tests
 
@@ -57,15 +57,15 @@ Les profraw des deux passes sont fusionnés automatiquement lors du `report`.
 CARGO_COV_FILTER = grep -vE "^   (Compiling|Checking)|^    Finished|^     Running|^running [0-9]|^[.i]|^info: cargo-llvm-cov|^test [^ ]+ \.\.\. (ok|ignored)|^$$"
 
 coverage-kind-text: check-llvm-cov check-kind check-docker check-helm
-	@echo "[1/4] Nettoyage des données de coverage..."
-	@cargo llvm-cov clean > /dev/null 2>&1 || true
-	@echo "[2/4] Tests unitaires..."
-	@bash -c 'set -o pipefail; cargo llvm-cov --no-report --lib --tests 2>&1 | $(CARGO_COV_FILTER)'
-	@echo "[3/4] Tests d'intégration (cluster kind éphémère)..."
-	@bash scripts/test-integration-kind.sh --coverage
-	@echo "[4/4] Synthèse de coverage..."
-	@echo ""
-	@cargo llvm-cov report
+ @echo "[1/4] Nettoyage des données de coverage..."
+ @cargo llvm-cov clean > /dev/null 2>&1 || true
+ @echo "[2/4] Tests unitaires..."
+ @bash -c 'set -o pipefail; cargo llvm-cov --no-report --lib --tests 2>&1 | $(CARGO_COV_FILTER)'
+ @echo "[3/4] Tests d'intégration (cluster kind éphémère)..."
+ @bash scripts/test-integration-kind.sh --coverage
+ @echo "[4/4] Synthèse de coverage..."
+ @echo ""
+ @cargo llvm-cov report
 ```
 
 ### Flag `--coverage` dans le script kind
@@ -114,7 +114,7 @@ de synthèse par fichier, utiliser `cargo llvm-cov report` sans flag de format.
 
 **`-q` et `-- --quiet` en conflit**
 
-```
+```bash
 # ERREUR : Option 'quiet' given more than once
 cargo llvm-cov --no-report -q --lib --tests -- --quiet
 ```
@@ -126,7 +126,7 @@ pas la sortie du test runner (dots, "running N tests") avec cargo llvm-cov.
 Solution : filtrer la sortie via `CARGO_COV_FILTER` dans un sous-shell bash avec `pipefail`
 pour préserver le code de retour de cargo :
 
-```bash
+```shell
 bash -c 'set -o pipefail; cargo llvm-cov --no-report --lib --tests 2>&1 | grep -vE "..."'
 ```
 
@@ -135,7 +135,7 @@ bash -c 'set -o pipefail; cargo llvm-cov --no-report --lib --tests 2>&1 | grep -
 Appeler `mkdir -p $(COVERAGE_DIR)` APRÈS `cargo llvm-cov clean`, pas avant, pour les
 targets qui écrivent dans ce répertoire (JSON).
 
-**Infrastructure kind/helm : rediriger vers un log**
+### Infrastructure kind/helm : rediriger vers un log
 
 ```bash
 KIND_LOG=".kube/kind-setup.log"

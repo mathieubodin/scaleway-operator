@@ -221,6 +221,45 @@ Le script vérifie les prérequis, installe l'extension `gh-token` si nécessair
 GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 ```
 
+### Token tracking git
+
+Chaque commit produit pendant une session Claude Code porte automatiquement trois trailers :
+
+```text
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+Claude-Session: 5db07156
+Claude-Tokens-Delta: 4200
+Claude-Tokens-Total: 18700
+```
+
+L'injection passe par `git interpret-trailers`, qui garantit que les trailers `Claude-*` forment toujours un bloc final parseable
+par `git log --format='%(trailers:...)'` — y compris quand le message contient des footers GitHub sans deux-points (`Closes #7`)
+qui ne sont pas des trailers valides au sens git.
+
+**Activation** — exécuter une fois après le clonage :
+
+```bash
+bash scripts/setup-dev.sh
+```
+
+Le script copie les hooks vers `~/.claude/hooks/`, les enregistre dans `~/.claude/settings.json`, et crée le symlink `.git/hooks/prepare-commit-msg`. Les hooks sont actifs au prochain démarrage de Claude Code.
+
+**Requêtes utiles :**
+
+```bash
+# Coût total en tokens d'une feature (tous les commits de la branche)
+git log --format='%(trailers:key=Claude-Tokens-Delta,valueonly)' | awk 'NF{s+=$1} END{print s}'
+
+# Coût par commit (sujet + delta)
+git log --format='%s%n%(trailers:key=Claude-Tokens-Delta,valueonly)'
+```
+
+**Limitation connue :** `git commit --amend -m "..."` n'est pas détectable comme amend par le hook
+(`prepare-commit-msg` reçoit `source=message`). Le hook réinjecte alors des trailers frais et le `Claude-Tokens-Delta`
+du commit remplacé est perdu (sous-comptage). Pendant une session, préférer `git commit --amend` sans `-m`
+(l'amend est alors détecté et les trailers existants conservés).
+
 ### Project Field IDs
 
 Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de préparation de milestone pour filtrer les issues via GraphQL.
@@ -265,9 +304,9 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 11. **Fermer l'issue de rappel** : `gh issue close <n>`.
 
 > **Règle des axes** : l'axe informe uniquement le nommage — il ne contraint pas la sélection. Une issue d'un axe minoritaire peut être incluse.
-
+>
 > **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
-
+>
 > **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
 
 ## Proposer une fonctionnalité
@@ -280,7 +319,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 Le pattern standard pour une feature est :
 
-```
+```text
 #N  feat: titre parent (issue parente, pas de PR directe)
 ├── #N+1  feat(scope): U1 — première unité
 ├── #N+2  feat(scope): U2 — deuxième unité
@@ -326,7 +365,7 @@ done
 
 Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implémenter :
 
-```
+```text
 /cost 12500
 ```
 

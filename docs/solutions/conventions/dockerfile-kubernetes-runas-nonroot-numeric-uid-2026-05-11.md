@@ -17,7 +17,9 @@ tags:
 
 ## Context
 
-Kubernetes ne peut pas vérifier qu'un utilisateur nommé est non-root au démarrage du container. La directive `USER operator` dans le Dockerfile fait fonctionner l'image localement, mais Kubernetes rejette le pod avec une erreur de sécurité dès que `runAsNonRoot: true` est positionné dans le `securityContext`.
+Kubernetes ne peut pas vérifier qu'un utilisateur nommé est non-root au démarrage du container. La directive
+`USER operator` dans le Dockerfile fait fonctionner l'image localement, mais Kubernetes rejette le pod avec une
+erreur de sécurité dès que `runAsNonRoot: true` est positionné dans le `securityContext`.
 
 ## Guidance
 
@@ -41,11 +43,14 @@ La convention `65532:65532` (UID:GID) est celle de l'écosystème distroless (Go
 
 ## Why This Matters
 
-Kubernetes évalue `runAsNonRoot` en lisant le champ `User` des métadonnées OCI de l'image **avant** le démarrage du container. Si ce champ contient une chaîne non numérique, Kubernetes ne peut pas résoudre l'UID sans exécuter le container. Un UID numérique est auto-descriptif : Kubernetes vérifie directement que la valeur est différente de 0.
+Kubernetes évalue `runAsNonRoot` en lisant le champ `User` des métadonnées OCI de l'image **avant** le démarrage
+du container. Si ce champ contient une chaîne non numérique, Kubernetes ne peut pas résoudre l'UID sans exécuter
+le container. Un UID numérique est auto-descriptif : Kubernetes vérifie directement que la valeur est différente
+de 0.
 
 Symptôme quand non appliqué :
 
-```
+```text
 container has runAsNonRoot and image has non-numeric user (operator),
 cannot verify user is non-root
 ```

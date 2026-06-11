@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+
+# Skip on git commit --amend (source=commit + sha).
+# Limitation : `--amend -m` arrive avec source=message et n'est pas
+# détectable ici — le delta du commit remplacé est alors perdu (cf. CONTRIBUTING.md).
+[ "${2:-}" = "commit" ] && [ -n "${3:-}" ] && exit 0
+
+session_id=$(cat "$GIT_DIR/claude_session_id" 2>/dev/null) || exit 0
+tokens_session=$(cat "$GIT_DIR/claude_tokens_session" 2>/dev/null) || exit 0
+tokens_last=$(cat "$GIT_DIR/claude_tokens_last_commit" 2>/dev/null || printf '0')
+carryover=$(cat "$GIT_DIR/claude_tokens_carryover" 2>/dev/null || printf '0')
+
+[[ "$tokens_session" =~ ^[0-9]+$ ]] || tokens_session=0
+[[ "$tokens_last"    =~ ^[0-9]+$ ]] || tokens_last=0
+[[ "$carryover"      =~ ^[0-9]+$ ]] || carryover=0
+
+delta=$(( tokens_session - tokens_last + carryover ))
+[ "$delta" -lt 0 ] && delta=0
+
+session_short="${session_id:0:8}"
+
+# interpret-trailers garantit un bloc final toujours parseable par
+# `git log --format='%(trailers:...)'`, même quand le message contient des
+# footers non-trailer type "Closes #7" (syntaxe GitHub sans deux-points)
+# qui invalideraient le bloc s'ils y étaient mélangés.
+git interpret-trailers --in-place --if-exists replace \
+    --trailer "Claude-Session: $session_short" \
+    --trailer "Claude-Tokens-Delta: $delta" \
+    --trailer "Claude-Tokens-Total: $tokens_session" \
+    "$1"
+
+printf '%d' "$tokens_session" > "$GIT_DIR/claude_tokens_last_commit"
+printf '0' > "$GIT_DIR/claude_tokens_carryover"

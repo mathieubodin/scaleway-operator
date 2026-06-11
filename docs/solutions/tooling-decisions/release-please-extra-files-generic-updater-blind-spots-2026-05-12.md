@@ -48,7 +48,9 @@ helm upgrade scaleway-operator     ... --version 0.1.6 \   # operator
 
 ### Contrainte 1 — Le generic updater remplace TOUTES les occurrences
 
-Le generic updater de release-please cherche la chaîne de version courante (ex. `0.1.6`) dans l'intégralité du fichier et remplace **chaque occurrence** par la nouvelle version. Il ne cible pas une ligne spécifique. Les commentaires `# crds` / `# operator` sont transparents pour lui — ils ne servent qu'à la lisibilité humaine.
+Le generic updater de release-please cherche la chaîne de version courante (ex. `0.1.6`) dans l'intégralité du fichier et remplace
+**chaque occurrence** par la nouvelle version. Il ne cible pas une ligne spécifique. Les commentaires `# crds` / `# operator`
+sont transparents pour lui — ils ne servent qu'à la lisibilité humaine.
 
 **Conséquence :** si `0.1.6` apparaît ailleurs dans README.md (prose, exemples de changelog, tutoriel), ces occurrences seront aussi remplacées.
 

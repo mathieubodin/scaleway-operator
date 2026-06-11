@@ -27,7 +27,10 @@ tags:
 
 ## Context
 
-Les tests d'intégration de `reconcile_instance` dans `tests/integration.rs` étaient tous marqués `#[ignore]`. Ils dépendaient d'un `kubectl proxy` tournant sur `http://127.0.0.1:8001` et d'une variable `KUBE_API_URL` injectée manuellement — un setup impossible à reproduire en CI et trop fragile pour le développement local. La couverture de `reconcilers.rs` stagnait à ~48% précisément parce que ces tests ne s'exécutaient jamais.
+Les tests d'intégration de `reconcile_instance` dans `tests/integration.rs` étaient tous marqués `#[ignore]`. Ils dépendaient
+d'un `kubectl proxy` tournant sur `http://127.0.0.1:8001` et d'une variable `KUBE_API_URL` injectée manuellement — un setup
+impossible à reproduire en CI et trop fragile pour le développement local. La couverture de `reconcilers.rs` stagnait à ~48%
+précisément parce que ces tests ne s'exécutaient jamais.
 
 ## Guidance
 
