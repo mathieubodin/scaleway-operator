@@ -20,13 +20,17 @@ tags:
 
 ## Problem
 
-Dans `release-please-config.json`, `changelog-path` est résolu relativement au répertoire de chaque package, pas à la racine du repo. Spécifier `"charts/scaleway-operator-crds/CHANGELOG.md"` pour un package dont le répertoire est `charts/scaleway-operator-crds` produit le chemin concaténé `charts/scaleway-operator-crds/charts/scaleway-operator-crds/CHANGELOG.md`. Helm interprète le préfixe `charts/` comme un sous-chart et échoue car il n'y a pas de `Chart.yaml` à cet emplacement.
+Dans `release-please-config.json`, `changelog-path` est résolu relativement au répertoire de chaque package, pas à
+la racine du repo. Spécifier `"charts/scaleway-operator-crds/CHANGELOG.md"` pour un package dont le répertoire est
+`charts/scaleway-operator-crds` produit le chemin concaténé
+`charts/scaleway-operator-crds/charts/scaleway-operator-crds/CHANGELOG.md`. Helm interprète le préfixe `charts/`
+comme un sous-chart et échoue car il n'y a pas de `Chart.yaml` à cet emplacement.
 
 ## Symptoms
 
 - `helm package charts/scaleway-operator-crds/` échoue avec :
 
-  ```
+  ```text
   Error: Chart.yaml file is missing in charts/scaleway-operator-crds/charts/scaleway-operator-crds
   ```
 

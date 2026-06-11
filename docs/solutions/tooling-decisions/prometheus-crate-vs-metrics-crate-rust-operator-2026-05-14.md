@@ -33,7 +33,7 @@ Le codebase utilise `prometheus 0.14` directement depuis son origine. Tous les p
 ### Comparaison des deux approches
 
 | Critère | `prometheus` (choisi) | `metrics` |
-|---------|----------------------|-----------|
+| ------- | -------------------- | --------- |
 | API | Impérative, explicite | Façade macro (`counter!`, `gauge!`) |
 | Registre | `Registry` explicite, injecté dans `OperatorMetrics::new()` | Registre global implicite |
 | Labels | `with_label_values(&[...])` — typés à l'usage | Définis via macros |
@@ -45,7 +45,8 @@ Le codebase utilise `prometheus 0.14` directement depuis son origine. Tous les p
 
 L'argument principal pour `metrics` est la portabilité (changer d'exporter sans changer le code d'instrumentation). Pour un opérateur Kubernetes qui expose `/metrics` en format Prometheus text — c'est la seule convention de l'écosystème kube-rs — cette portabilité n'a pas de valeur.
 
-Le registre explicite de `prometheus` a par ailleurs un avantage test concret : chaque test instancie `OperatorMetrics::new(&Registry::new())` avec un registre frais, garantissant l'isolation sans setup global. Avec `metrics` et son registre global, ce pattern nécessite un reset entre tests.
+Le registre explicite de `prometheus` a par ailleurs un avantage test concret : chaque test instancie `OperatorMetrics::new(&Registry::new())`
+avec un registre frais, garantissant l'isolation sans setup global. Avec `metrics` et son registre global, ce pattern nécessite un reset entre tests.
 
 ### Pattern d'ajout d'une nouvelle métrique
 

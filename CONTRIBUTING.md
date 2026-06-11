@@ -225,7 +225,7 @@ GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 
 Chaque commit produit pendant une session Claude Code porte automatiquement trois trailers :
 
-```
+```text
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 
 Claude-Session: 5db07156
@@ -304,9 +304,9 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 11. **Fermer l'issue de rappel** : `gh issue close <n>`.
 
 > **Règle des axes** : l'axe informe uniquement le nommage — il ne contraint pas la sélection. Une issue d'un axe minoritaire peut être incluse.
-
+>
 > **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
-
+>
 > **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
 
 ## Proposer une fonctionnalité
@@ -319,7 +319,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 Le pattern standard pour une feature est :
 
-```
+```text
 #N  feat: titre parent (issue parente, pas de PR directe)
 ├── #N+1  feat(scope): U1 — première unité
 ├── #N+2  feat(scope): U2 — deuxième unité
@@ -365,7 +365,7 @@ done
 
 Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implémenter :
 
-```
+```text
 /cost 12500
 ```
 

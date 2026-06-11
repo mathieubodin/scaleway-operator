@@ -116,19 +116,19 @@ Pour utiliser l'opérateur, il faut préparer le namespace qui sera le pendant d
 
 Chaque namespace Kubernetes correspond à un projet Scaleway. L'opérateur s'authentifie auprès de l'API Scaleway avec une IAM Application scopée à ce projet.
 
-**1. Créer ou identifier un projet Scaleway**
+#### 1. Créer ou identifier un projet Scaleway
 
 Dans la console Scaleway : **Projects** → sélectionner ou créer un projet.
 Notez le **Project UUID** (visible dans les paramètres du projet, sous "Project ID").
 
-**2. Créer une IAM Application**
+#### 2. Créer une IAM Application
 
 Dans la console Scaleway : **IAM** → **Applications** → **Créer une application**.
 
 - Donnez-lui un nom explicite (ex. : `k8s-operator-production`)
 - Notez son ID
 
-**3. Créer une policy et l'attacher à l'application**
+#### 3. Créer une policy et l'attacher à l'application
 
 IAM → **Policies** → **Créer une policy** :
 
@@ -139,7 +139,7 @@ IAM → **Policies** → **Créer une policy** :
 
 Attachez cette policy à l'application créée à l'étape précédente.
 
-**4. Créer une clé API pour l'application**
+#### 4. Créer une clé API pour l'application
 
 IAM → Applications → votre application → **Clés API** → **Créer une clé API**.
 Notez la **clé secrète** (affichée une seule fois).
@@ -148,7 +148,7 @@ Notez la **clé secrète** (affichée une seule fois).
 
 Trois ressources sont nécessaires pour chaque namespace hébergeant des `Instance`.
 
-**1. Créer le namespace avec l'annotation de projet**
+#### 1. Créer le namespace avec l'annotation de projet
 
 ```bash
 kubectl create namespace production
@@ -156,7 +156,7 @@ kubectl annotate namespace production \
   scaleway.mathieubodin.io/project-id="<project-uuid>"
 ```
 
-**2. Créer le NamespaceRole**
+#### 2. Créer le NamespaceRole
 
 ```yaml
 apiVersion: scaleway.mathieubodin.io/v1
@@ -172,7 +172,7 @@ spec:
 kubectl apply -f namespacerole.yaml
 ```
 
-**3. Créer le Secret IAM dans scaleway-system**
+#### 3. Créer le Secret IAM dans scaleway-system
 
 ```bash
 # SCW_SECRET_KEY : clé secrète de l'IAM Application (étape 4 ci-dessus)
