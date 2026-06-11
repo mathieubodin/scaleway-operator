@@ -6,6 +6,8 @@ globs:
   - "**/*.md"
 ignores:
   - .claude/**
+  - CHANGELOG.md
+  - charts/**/CHANGELOG.md
 config:
   MD001:
     front_matter_title: ""
