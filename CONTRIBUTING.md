@@ -226,11 +226,16 @@ GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
 Chaque commit produit pendant une session Claude Code porte automatiquement trois trailers :
 
 ```
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
 Claude-Session: 5db07156
 Claude-Tokens-Delta: 4200
 Claude-Tokens-Total: 18700
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
+
+L'injection passe par `git interpret-trailers`, qui garantit que les trailers `Claude-*` forment toujours un bloc final parseable
+par `git log --format='%(trailers:...)'` — y compris quand le message contient des footers GitHub sans deux-points (`Closes #7`)
+qui ne sont pas des trailers valides au sens git.
 
 **Activation** — exécuter une fois après le clonage :
 
@@ -249,6 +254,11 @@ git log --format='%(trailers:key=Claude-Tokens-Delta,valueonly)' | awk 'NF{s+=$1
 # Coût par commit (sujet + delta)
 git log --format='%s%n%(trailers:key=Claude-Tokens-Delta,valueonly)'
 ```
+
+**Limitation connue :** `git commit --amend -m "..."` n'est pas détectable comme amend par le hook
+(`prepare-commit-msg` reçoit `source=message`). Le hook réinjecte alors des trailers frais et le `Claude-Tokens-Delta`
+du commit remplacé est perdu (sous-comptage). Pendant une session, préférer `git commit --amend` sans `-m`
+(l'amend est alors détecté et les trailers existants conservés).
 
 ### Project Field IDs
 

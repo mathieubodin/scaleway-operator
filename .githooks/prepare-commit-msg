@@ -3,7 +3,9 @@ set -euo pipefail
 
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 
-# Skip on git commit --amend
+# Skip on git commit --amend (source=commit + sha).
+# Limitation : `--amend -m` arrive avec source=message et n'est pas
+# détectable ici — le delta du commit remplacé est alors perdu (cf. CONTRIBUTING.md).
 [ "${2:-}" = "commit" ] && [ -n "${3:-}" ] && exit 0
 
 session_id=$(cat "$GIT_DIR/claude_session_id" 2>/dev/null) || exit 0
@@ -20,26 +22,15 @@ delta=$(( tokens_session - tokens_last + carryover ))
 
 session_short="${session_id:0:8}"
 
-tmpout=$(mktemp)
-trap 'rm -f "$tmpout"' EXIT
-injected=0
-
-while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^Co-Authored-By: ]] && [[ $injected -eq 0 ]]; then
-        printf "Claude-Session: %s\nClaude-Tokens-Delta: %d\nClaude-Tokens-Total: %d\n" \
-            "$session_short" "$delta" "$tokens_session" >> "$tmpout"
-        injected=1
-    fi
-    printf "%s\n" "$line" >> "$tmpout"
-done < "$1"
-
-if [[ $injected -eq 0 ]]; then
-    printf "\nClaude-Session: %s\nClaude-Tokens-Delta: %d\nClaude-Tokens-Total: %d\n" \
-        "$session_short" "$delta" "$tokens_session" >> "$tmpout"
-fi
-
-mv "$tmpout" "$1"
-trap - EXIT
+# interpret-trailers garantit un bloc final toujours parseable par
+# `git log --format='%(trailers:...)'`, même quand le message contient des
+# footers non-trailer type "Closes #7" (syntaxe GitHub sans deux-points)
+# qui invalideraient le bloc s'ils y étaient mélangés.
+git interpret-trailers --in-place --if-exists replace \
+    --trailer "Claude-Session: $session_short" \
+    --trailer "Claude-Tokens-Delta: $delta" \
+    --trailer "Claude-Tokens-Total: $tokens_session" \
+    "$1"
 
 printf '%d' "$tokens_session" > "$GIT_DIR/claude_tokens_last_commit"
 printf '0' > "$GIT_DIR/claude_tokens_carryover"
