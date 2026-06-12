@@ -717,7 +717,7 @@ where
     let result = f().await;
     match &result {
         Ok(_) => ctx.record_scaleway_success(),
-        Err(e) if !is_permanent_error(e) => ctx.record_scaleway_failure(),
+        Err(e) if !e.is_permanent_error() => ctx.record_scaleway_failure(),
         _ => {}
     }
     result
@@ -1315,23 +1315,6 @@ async fn validate_lb_spec(
     Ok(())
 }
 
-/// Retourne true si l'erreur est permanente (spec/config incorrecte, ne pas requeue).
-/// Fonction extraite pour être testable sans dépendance sur Arc<Instance> ou Arc<Context>.
-fn is_permanent_error(error: &OperatorError) -> bool {
-    matches!(
-        error,
-        OperatorError::InvalidZone(_)
-            | OperatorError::InvalidInstanceType(_)
-            | OperatorError::InvalidLbType(_)
-            | OperatorError::ConfigError(_)
-            | OperatorError::ProjectAccessDenied(_)
-            | OperatorError::SecretSourceNotConfigured(_)
-    )
-    // CircuitBreakerOpen is explicitly transient — backoff applies, not await_change
-    // KubeError, ScalewayError, NetworkError, SerializationError, FinalizationError, Unknown:
-    // all transient by exhaustive exclusion
-}
-
 // ── ScalewaySecret reconciler ────────────────────────────────────────────────
 
 /// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
@@ -1349,6 +1332,9 @@ struct SecretReconcileInput {
     /// resourceVersion courant du Secret K8s source.
     /// None = K8s Secret introuvable (erreur transitoire).
     current_resource_version: Option<String>,
+    /// La clé `spec.source.kubernetes_secret.key` existe dans `.data` du Secret K8s.
+    /// Pertinent uniquement quand current_resource_version est Some.
+    current_key_present: bool,
 }
 
 #[derive(Debug)]
@@ -1359,6 +1345,8 @@ enum SecretReconcileDecision {
     ErrorSourceNotConfigured,
     /// Le K8s Secret source est absent — erreur transitoire.
     ErrorKsSecretNotFound,
+    /// Le K8s Secret existe mais la clé référencée est absente de `.data` — erreur transitoire.
+    ErrorKsKeyNotFound,
     /// Aucun secret Scaleway connu — créer et pousser la première version.
     CreateAndSyncSecret,
     /// Secret Scaleway connu, valeur changée — pousser une nouvelle version.
@@ -1396,6 +1384,10 @@ fn decide_next_action_secret(input: &SecretReconcileInput) -> SecretReconcileDec
     // 5. K8s Secret introuvable (transitoire)
     if input.current_resource_version.is_none() {
         return SecretReconcileDecision::ErrorKsSecretNotFound;
+    }
+    // 5bis. K8s Secret présent mais clé manquante dans .data (transitoire — distinct du cas Secret absent)
+    if !input.current_key_present {
+        return SecretReconcileDecision::ErrorKsKeyNotFound;
     }
     // 6. Pas de secret Scaleway connu — créer
     if input.scaleway_id.is_none() {
@@ -1453,44 +1445,50 @@ async fn reconcile_scaleway_secret_inner(
 
     let current_status = secret_cr.status.clone().unwrap_or_default();
 
-    // Lire le resourceVersion du Secret K8s source si possible.
+    // Lire le resourceVersion du Secret K8s source + présence de la clé si possible.
     // Vérifie d'abord le label d'opt-in pour prévenir le Confused Deputy :
     // un utilisateur avec `create scalewaysecrets` ne doit pas pouvoir lire
     // un Secret qu'il ne possède pas via le ServiceAccount privilégié de l'opérateur.
-    let current_resource_version = if !deletion_requested && source_configured {
-        if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
-            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
-            match ks_api.get(&ks_ref.name).await {
-                Ok(ks) => {
-                    let opt_in = ks
-                        .metadata
-                        .labels
-                        .as_ref()
-                        .and_then(|l| l.get("scaleway.mathieubodin.io/allow-operator-read"))
-                        .map(|v| v == "true")
-                        .unwrap_or(false);
-                    if !opt_in {
-                        let e = OperatorError::SecretOptInMissing(format!(
-                            "Kubernetes Secret '{}' must have label \
-                             'scaleway.mathieubodin.io/allow-operator-read: \"true\"'",
-                            ks_ref.name
-                        ));
-                        let mut status = current_status.clone();
-                        status.error_message = Some(e.for_status());
-                        status.sync_state = "Error".to_string();
-                        let _ = update_secret_status(&secret_cr, &api, status).await;
-                        return Err(e);
+    let (current_resource_version, current_key_present) =
+        if !deletion_requested && source_configured {
+            if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
+                let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
+                match ks_api.get(&ks_ref.name).await {
+                    Ok(ks) => {
+                        let opt_in = ks
+                            .metadata
+                            .labels
+                            .as_ref()
+                            .and_then(|l| l.get("scaleway.mathieubodin.io/allow-operator-read"))
+                            .map(|v| v == "true")
+                            .unwrap_or(false);
+                        if !opt_in {
+                            let e = OperatorError::SecretOptInMissing(format!(
+                                "Kubernetes Secret '{}' must have label \
+                                 'scaleway.mathieubodin.io/allow-operator-read: \"true\"'",
+                                ks_ref.name
+                            ));
+                            let mut status = current_status.clone();
+                            status.error_message = Some(e.for_status());
+                            status.sync_state = "Error".to_string();
+                            let _ = update_secret_status(&secret_cr, &api, status).await;
+                            return Err(e);
+                        }
+                        let key_present = ks
+                            .data
+                            .as_ref()
+                            .map(|d| d.contains_key(&ks_ref.key))
+                            .unwrap_or(false);
+                        (ks.metadata.resource_version.clone(), key_present)
                     }
-                    ks.metadata.resource_version.clone()
+                    Err(_) => (None, false),
                 }
-                Err(_) => None,
+            } else {
+                (None, false)
             }
         } else {
-            None
-        }
-    } else {
-        None
-    };
+            (None, false)
+        };
 
     let input = SecretReconcileInput {
         deletion_requested,
@@ -1500,6 +1498,7 @@ async fn reconcile_scaleway_secret_inner(
         scaleway_id: current_status.scaleway_id.clone(),
         last_synced_resource_version: current_status.last_synced_resource_version.clone(),
         current_resource_version: current_resource_version.clone(),
+        current_key_present,
     };
 
     let decision = decide_next_action_secret(&input);
@@ -1542,6 +1541,25 @@ async fn reconcile_scaleway_secret_inner(
             let e = OperatorError::SecretNotFound(format!(
                 "Kubernetes Secret '{}' not found in namespace '{}'",
                 ks_name, namespace
+            ));
+            let mut status = current_status;
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_secret_status(&secret_cr, &api, status).await;
+            Err(e)
+        }
+
+        SecretReconcileDecision::ErrorKsKeyNotFound => {
+            let (ks_name, ks_key) = secret_cr
+                .spec
+                .source
+                .kubernetes_secret
+                .as_ref()
+                .map(|r| (r.name.as_str(), r.key.as_str()))
+                .unwrap_or(("<unknown>", "<unknown>"));
+            let e = OperatorError::SecretNotFound(format!(
+                "Key '{}' not found in Kubernetes Secret '{}' in namespace '{}'",
+                ks_key, ks_name, namespace
             ));
             let mut status = current_status;
             status.error_message = Some(e.for_status());
@@ -1843,7 +1861,7 @@ async fn update_secret_status(
 }
 
 fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
-    if is_permanent_error(error) {
+    if error.is_permanent_error() {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
@@ -2141,60 +2159,6 @@ mod tests {
         );
         assert!(instance_key.starts_with("instance/"));
         assert!(lb_key.starts_with("loadbalancer/"));
-    }
-
-    // --- is_permanent_error / error_policy classification ---
-
-    #[test]
-    fn test_config_error_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::ConfigError(
-            "bad annotation".into()
-        )));
-    }
-
-    #[test]
-    fn test_invalid_zone_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::InvalidZone(
-            "us-east-1".into()
-        )));
-    }
-
-    #[test]
-    fn test_invalid_instance_type_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::InvalidInstanceType(
-            "MEGA-XL".into()
-        )));
-    }
-
-    #[test]
-    fn test_project_access_denied_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::ProjectAccessDenied(
-            "proj-x".into()
-        )));
-    }
-
-    #[test]
-    fn test_scaleway_error_is_transient() {
-        assert!(!is_permanent_error(&OperatorError::ScalewayError {
-            status: "500 Internal Server Error".into(),
-            message: "server error".into(),
-        }));
-    }
-
-    #[test]
-    fn test_kube_error_is_transient() {
-        // KubeError wraps kube::error::Error — difficile à construire directement.
-        // On vérifie via FinalizationError comme proxy d'erreur non-permanente.
-        assert!(!is_permanent_error(&OperatorError::FinalizationError(
-            "timeout".into()
-        )));
-    }
-
-    #[test]
-    fn test_unknown_error_is_transient() {
-        assert!(!is_permanent_error(&OperatorError::Unknown(
-            "mystery".into()
-        )));
     }
 
     // ── ReconcileMeasurer unit tests ─────────────────────────────────────────
@@ -2559,6 +2523,7 @@ mod tests {
             scaleway_id: Some("sec-abc123".to_string()),
             last_synced_resource_version: Some("12345".to_string()),
             current_resource_version: Some("12345".to_string()),
+            current_key_present: true,
         }
     }
 
@@ -2611,11 +2576,26 @@ mod tests {
     fn test_secret_decide_ks_secret_not_found_returns_error() {
         let input = SecretReconcileInput {
             current_resource_version: None,
+            current_key_present: false,
             ..base_secret_input()
         };
         assert!(matches!(
             decide_next_action_secret(&input),
             SecretReconcileDecision::ErrorKsSecretNotFound
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_ks_key_not_found_returns_distinct_error() {
+        // K8s Secret présent (resource_version Some) mais clé absente de .data —
+        // distinct du cas "Secret absent" pour donner un message d'erreur clair.
+        let input = SecretReconcileInput {
+            current_key_present: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorKsKeyNotFound
         ));
     }
 

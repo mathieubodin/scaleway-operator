@@ -95,6 +95,7 @@ impl OperatorError {
                 | OperatorError::InvalidInstanceType(_)
                 | OperatorError::InvalidLbType(_)
                 | OperatorError::ConfigError(_)
+                | OperatorError::ProjectAccessDenied(_)
                 | OperatorError::SecretSourceNotConfigured(_)
                 | OperatorError::SecretOptInMissing(_)
         )
@@ -169,6 +170,33 @@ mod tests {
     }
 
     #[test]
+    fn test_for_status_secret_not_found_passthrough() {
+        let e = OperatorError::SecretNotFound("Key 'token' missing".to_string());
+        assert_eq!(e.for_status(), "Secret not found: Key 'token' missing");
+    }
+
+    #[test]
+    fn test_for_status_secret_source_not_configured_passthrough() {
+        let e = OperatorError::SecretSourceNotConfigured("missing source".to_string());
+        assert_eq!(
+            e.for_status(),
+            "Secret source not configured: missing source"
+        );
+    }
+
+    #[test]
+    fn test_for_status_secret_opt_in_missing_passthrough() {
+        let e = OperatorError::SecretOptInMissing("label required".to_string());
+        assert_eq!(e.for_status(), "Secret opt-in missing: label required");
+    }
+
+    #[test]
+    fn test_for_status_circuit_breaker_open_generic() {
+        let e = OperatorError::CircuitBreakerOpen;
+        assert_eq!(e.for_status(), "Scaleway API temporarily unavailable");
+    }
+
+    #[test]
     fn test_lb_not_found_metric_label() {
         let e = OperatorError::LbNotFound("lb-abc123".to_string());
         assert_eq!(e.metric_label(), "LbNotFound");
@@ -190,6 +218,12 @@ mod tests {
     fn test_secret_source_not_configured_metric_label() {
         let e = OperatorError::SecretSourceNotConfigured("no source".to_string());
         assert_eq!(e.metric_label(), "SecretSourceNotConfigured");
+    }
+
+    #[test]
+    fn test_secret_opt_in_missing_metric_label() {
+        let e = OperatorError::SecretOptInMissing("no label".to_string());
+        assert_eq!(e.metric_label(), "SecretOptInMissing");
     }
 
     #[test]
@@ -215,6 +249,51 @@ mod tests {
     fn test_invalid_zone_is_permanent() {
         let e = OperatorError::InvalidZone("bad-zone".to_string());
         assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_invalid_instance_type_is_permanent() {
+        let e = OperatorError::InvalidInstanceType("MEGA-XL".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_invalid_lb_type_is_permanent() {
+        let e = OperatorError::InvalidLbType("MEGA-LB".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_config_error_is_permanent() {
+        let e = OperatorError::ConfigError("bad annotation".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_project_access_denied_is_permanent() {
+        let e = OperatorError::ProjectAccessDenied("proj-x".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_secret_opt_in_missing_is_permanent() {
+        let e = OperatorError::SecretOptInMissing("no label".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_scaleway_error_is_transient() {
+        let e = OperatorError::ScalewayError {
+            status: "500 Internal Server Error".to_string(),
+            message: "server error".to_string(),
+        };
+        assert!(!e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_finalization_error_is_transient() {
+        let e = OperatorError::FinalizationError("timeout".to_string());
+        assert!(!e.is_permanent_error());
     }
 }
 
