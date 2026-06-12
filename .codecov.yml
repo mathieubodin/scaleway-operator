@@ -1,0 +1,22 @@
+coverage:
+  status:
+    project:
+      default:
+        enabled: false
+    patch:
+      default:
+        target: 80%
+        threshold: 0%
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+
+flags:
+  unit:
+    paths:
+      - src/
+    carryforward: true
+  integration:
+    paths:
+      - src/
