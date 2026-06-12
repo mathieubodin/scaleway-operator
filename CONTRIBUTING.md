@@ -81,6 +81,30 @@ Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRole
 | `scw-test-viewer` | UUID valide | Viewer | oui | Rôle lecture seule |
 | `scw-test-editor` | UUID valide | Editor | oui | Happy path : finalizer, suppression, création, sync, adoption, erreurs (plusieurs tests) |
 
+### Pipeline CI
+
+Deux workflows GitHub Actions s'exécutent automatiquement :
+
+| Workflow | Déclencheur | Jobs |
+| --- | --- | --- |
+| `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
+| `release.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+
+Le gate de merge repose sur trois required status checks :
+
+- `lint` — `make check` doit passer (cargo fmt + clippy + markdownlint)
+- `unit-tests` — tests unitaires + couverture générée
+- `codecov/patch` — patch coverage ≥ 80 % (activé après la première upload Codecov)
+
+#### Configurer Codecov pour un fork
+
+Pour que l'upload de couverture fonctionne depuis un fork :
+
+1. Connecter le fork sur [codecov.io](https://codecov.io) et récupérer le Repository Token.
+2. Ajouter le secret `CODECOV_TOKEN` dans les Settings du fork : **Settings → Secrets and variables → Actions**.
+
+Sans ce secret, `pr.yml` passe quand même (les tests tournent) mais l'upload Codecov échoue silencieusement et le check `codecov/patch` n'apparaît pas.
+
 ### Déploiement sur un cluster réel
 
 #### Kubeconfig
@@ -356,8 +380,8 @@ done
 **Checklist avant de soumettre :**
 
 - [ ] `make check` passe sans warnings
-- [ ] `make coverage-text` passe
-- [ ] `make test-integration-kind` passe
+- [ ] `make coverage-text` passe (tests unitaires)
+- [ ] `make coverage-lcov` produit `target/llvm-cov/lcov.info` non vide
 - [ ] `make generate-crds` relancé si `src/resources.rs` modifié
 - [ ] Documentation à jour
 
