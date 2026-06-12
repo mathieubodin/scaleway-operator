@@ -39,6 +39,14 @@ pub enum OperatorError {
     #[error("Finalization error: {0}")]
     FinalizationError(String),
 
+    #[error("Secret not found: {0}")]
+    SecretNotFound(String),
+
+    /// La spec du CR ne contient pas de source valide (erreur permanente — ne se résout
+    /// pas sans intervention de l'utilisateur).
+    #[error("Secret source not configured: {0}")]
+    SecretSourceNotConfigured(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 
@@ -64,9 +72,25 @@ impl OperatorError {
             OperatorError::NetworkError(_) => "NetworkError",
             OperatorError::SerializationError(_) => "SerializationError",
             OperatorError::FinalizationError(_) => "FinalizationError",
+            OperatorError::SecretNotFound(_) => "SecretNotFound",
+            OperatorError::SecretSourceNotConfigured(_) => "SecretSourceNotConfigured",
             OperatorError::Unknown(_) => "Unknown",
             OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
+    }
+
+    /// Returns true for errors that indicate a permanent misconfiguration.
+    /// The reconciler should not requeue on permanent errors — only user
+    /// intervention (editing the CR spec) can resolve them.
+    pub fn is_permanent_error(&self) -> bool {
+        matches!(
+            self,
+            OperatorError::InvalidZone(_)
+                | OperatorError::InvalidInstanceType(_)
+                | OperatorError::InvalidLbType(_)
+                | OperatorError::ConfigError(_)
+                | OperatorError::SecretSourceNotConfigured(_)
+        )
     }
 }
 
@@ -147,6 +171,43 @@ mod tests {
     fn test_lb_not_found_for_status_passthrough() {
         let e = OperatorError::LbNotFound("lb-xyz".to_string());
         assert_eq!(e.for_status(), "Load balancer not found: lb-xyz");
+    }
+
+    #[test]
+    fn test_secret_not_found_metric_label() {
+        let e = OperatorError::SecretNotFound("my-secret".to_string());
+        assert_eq!(e.metric_label(), "SecretNotFound");
+    }
+
+    #[test]
+    fn test_secret_source_not_configured_metric_label() {
+        let e = OperatorError::SecretSourceNotConfigured("no source".to_string());
+        assert_eq!(e.metric_label(), "SecretSourceNotConfigured");
+    }
+
+    #[test]
+    fn test_secret_not_found_is_not_permanent() {
+        let e = OperatorError::SecretNotFound("my-secret".to_string());
+        assert!(!e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_secret_source_not_configured_is_permanent() {
+        let e = OperatorError::SecretSourceNotConfigured("bad spec".to_string());
+        assert!(e.is_permanent_error());
+    }
+
+    #[test]
+    fn test_transient_errors_are_not_permanent() {
+        assert!(!OperatorError::CircuitBreakerOpen.is_permanent_error());
+        assert!(!OperatorError::Unknown("oops".to_string()).is_permanent_error());
+        assert!(!OperatorError::SecretNotFound("sec".to_string()).is_permanent_error());
+    }
+
+    #[test]
+    fn test_invalid_zone_is_permanent() {
+        let e = OperatorError::InvalidZone("bad-zone".to_string());
+        assert!(e.is_permanent_error());
     }
 }
 
