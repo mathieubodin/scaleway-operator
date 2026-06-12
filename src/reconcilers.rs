@@ -1450,12 +1450,36 @@ async fn reconcile_scaleway_secret_inner(
 
     let source_configured = secret_cr.spec.source.kubernetes_secret.is_some();
 
-    // Lire la valeur courante du K8s Secret source si possible
+    let current_status = secret_cr.status.clone().unwrap_or_default();
+
+    // Lire la valeur courante du K8s Secret source si possible.
+    // Vérifie d'abord le label d'opt-in pour prévenir le Confused Deputy :
+    // un utilisateur avec `create scalewaysecrets` ne doit pas pouvoir lire
+    // un Secret qu'il ne possède pas via le ServiceAccount privilégié de l'opérateur.
     let current_value_hash = if !deletion_requested && source_configured {
         if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
             let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
             match ks_api.get(&ks_ref.name).await {
                 Ok(ks) => {
+                    let opt_in = ks
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .and_then(|l| l.get("scaleway.mathieubodin.io/allow-operator-read"))
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    if !opt_in {
+                        let e = OperatorError::SecretOptInMissing(format!(
+                            "Kubernetes Secret '{}' must have label \
+                             'scaleway.mathieubodin.io/allow-operator-read: \"true\"'",
+                            ks_ref.name
+                        ));
+                        let mut status = current_status.clone();
+                        status.error_message = Some(e.for_status());
+                        status.sync_state = "Error".to_string();
+                        let _ = update_secret_status(&secret_cr, &api, status).await;
+                        return Err(e);
+                    }
                     let value = ks
                         .data
                         .as_ref()
@@ -1471,8 +1495,6 @@ async fn reconcile_scaleway_secret_inner(
     } else {
         None
     };
-
-    let current_status = secret_cr.status.clone().unwrap_or_default();
 
     let input = SecretReconcileInput {
         deletion_requested,

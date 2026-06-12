@@ -47,6 +47,11 @@ pub enum OperatorError {
     #[error("Secret source not configured: {0}")]
     SecretSourceNotConfigured(String),
 
+    /// Le Secret Kubernetes référencé n'a pas le label d'opt-in requis.
+    /// Erreur permanente — ne se résout pas sans ajouter le label sur le Secret.
+    #[error("Secret opt-in missing: {0}")]
+    SecretOptInMissing(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 
@@ -74,6 +79,7 @@ impl OperatorError {
             OperatorError::FinalizationError(_) => "FinalizationError",
             OperatorError::SecretNotFound(_) => "SecretNotFound",
             OperatorError::SecretSourceNotConfigured(_) => "SecretSourceNotConfigured",
+            OperatorError::SecretOptInMissing(_) => "SecretOptInMissing",
             OperatorError::Unknown(_) => "Unknown",
             OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
@@ -90,6 +96,7 @@ impl OperatorError {
                 | OperatorError::InvalidLbType(_)
                 | OperatorError::ConfigError(_)
                 | OperatorError::SecretSourceNotConfigured(_)
+                | OperatorError::SecretOptInMissing(_)
         )
     }
 }
