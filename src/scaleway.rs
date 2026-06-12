@@ -1546,7 +1546,17 @@ mod tests {
             .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
             .await;
 
-        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+        let Err(OperatorError::ScalewayError { status, message }) = result else {
+            panic!("expected ScalewayError, got {result:?}");
+        };
+        assert!(
+            status.contains("403"),
+            "status should contain '403' for differentiation, got {status}"
+        );
+        assert!(
+            message.contains("forbidden"),
+            "message should preserve body for diagnostics, got {message}"
+        );
     }
 
     #[tokio::test]
@@ -1569,7 +1579,17 @@ mod tests {
             .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
             .await;
 
-        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+        let Err(OperatorError::ScalewayError { status, message }) = result else {
+            panic!("expected ScalewayError, got {result:?}");
+        };
+        assert!(
+            status.contains("429"),
+            "status should contain '429' for rate-limit handling, got {status}"
+        );
+        assert!(
+            message.contains("too many requests"),
+            "message should preserve body, got {message}"
+        );
     }
 
     #[tokio::test]

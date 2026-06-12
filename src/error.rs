@@ -52,6 +52,11 @@ pub enum OperatorError {
     #[error("Secret opt-in missing: {0}")]
     SecretOptInMissing(String),
 
+    /// La clé référencée n'existe pas dans `.data` du Secret K8s.
+    /// Erreur permanente — résolue uniquement en éditant le CR (clé) ou le Secret (ajout de la clé).
+    #[error("Secret key not found: {0}")]
+    SecretKeyNotFound(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 
@@ -80,6 +85,7 @@ impl OperatorError {
             OperatorError::SecretNotFound(_) => "SecretNotFound",
             OperatorError::SecretSourceNotConfigured(_) => "SecretSourceNotConfigured",
             OperatorError::SecretOptInMissing(_) => "SecretOptInMissing",
+            OperatorError::SecretKeyNotFound(_) => "SecretKeyNotFound",
             OperatorError::Unknown(_) => "Unknown",
             OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
@@ -98,6 +104,7 @@ impl OperatorError {
                 | OperatorError::ProjectAccessDenied(_)
                 | OperatorError::SecretSourceNotConfigured(_)
                 | OperatorError::SecretOptInMissing(_)
+                | OperatorError::SecretKeyNotFound(_)
         )
     }
 }
@@ -224,6 +231,18 @@ mod tests {
     fn test_secret_opt_in_missing_metric_label() {
         let e = OperatorError::SecretOptInMissing("no label".to_string());
         assert_eq!(e.metric_label(), "SecretOptInMissing");
+    }
+
+    #[test]
+    fn test_secret_key_not_found_metric_label() {
+        let e = OperatorError::SecretKeyNotFound("missing key".to_string());
+        assert_eq!(e.metric_label(), "SecretKeyNotFound");
+    }
+
+    #[test]
+    fn test_secret_key_not_found_is_permanent() {
+        let e = OperatorError::SecretKeyNotFound("missing".to_string());
+        assert!(e.is_permanent_error());
     }
 
     #[test]

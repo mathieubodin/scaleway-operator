@@ -1317,6 +1317,104 @@ async fn validate_lb_spec(
 
 // ── ScalewaySecret reconciler ────────────────────────────────────────────────
 
+const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
+const STATUS_ERROR_GENERIC: &str = "Source Secret unavailable (see operator logs)";
+
+/// État lu en UNE seule fois depuis le Secret K8s source.
+/// Évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
+struct KsSourceState {
+    resource_version: Option<String>,
+    key_present: bool,
+    /// Charge utile décodée à partir de `.data[key]` quand `key_present` est true.
+    payload: Option<Vec<u8>>,
+}
+
+/// Vérifie le label d'opt-in `scaleway.mathieubodin.io/allow-operator-read: "true"`.
+/// Contrat strict : seule la chaîne exacte `"true"` autorise la lecture ; toute autre
+/// valeur (absente, vide, `"yes"`, `"True"`) refuse l'opt-in. Fonction pure pour
+/// pouvoir verrouiller ce contrat par test unitaire.
+fn is_opt_in_granted(labels: Option<&std::collections::BTreeMap<String, String>>) -> bool {
+    labels
+        .and_then(|l| l.get(OPT_IN_LABEL))
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
+/// Lit le Secret K8s source en UN seul appel API, vérifie le label d'opt-in,
+/// et retourne l'état nécessaire à la décision + le payload pour les branches actives.
+///
+/// Erreurs retournées :
+/// - `ConfigError` si l'opérateur n'a pas le droit de lire les Secrets dans ce namespace (403)
+/// - `SecretNotFound` si le Secret n'existe pas (404, transitoire — peut apparaître plus tard)
+/// - `SecretOptInMissing` si le label d'opt-in est absent ou différent de "true" (permanent)
+/// - `KubeError` pour toute autre erreur transitoire
+async fn read_k8s_secret_source(
+    ctx: &Arc<Context>,
+    namespace: &str,
+    ks_ref: &crate::resources::KubernetesSecretRef,
+) -> Result<KsSourceState> {
+    let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), namespace);
+    let ks = match ks_api.get(&ks_ref.name).await {
+        Ok(ks) => ks,
+        Err(kube::error::Error::Api(ae)) if ae.code == 403 => {
+            return Err(OperatorError::ConfigError(format!(
+                "Operator forbidden to read Secrets in namespace '{}' \
+                 (RBAC denied — verify the namespace is bootstrapped)",
+                namespace
+            )));
+        }
+        Err(kube::error::Error::Api(ae)) if ae.code == 404 => {
+            return Err(OperatorError::SecretNotFound(format!(
+                "Kubernetes Secret '{}' not found in namespace '{}'",
+                ks_ref.name, namespace
+            )));
+        }
+        Err(e) => return Err(OperatorError::KubeError(e)),
+    };
+
+    if !is_opt_in_granted(ks.metadata.labels.as_ref()) {
+        return Err(OperatorError::SecretOptInMissing(format!(
+            "Kubernetes Secret '{}' must carry label '{}: \"true\"'",
+            ks_ref.name, OPT_IN_LABEL
+        )));
+    }
+
+    let resource_version = ks.metadata.resource_version.clone();
+    let payload = ks
+        .data
+        .as_ref()
+        .and_then(|d| d.get(&ks_ref.key))
+        .map(|b| b.0.clone());
+    let key_present = payload.is_some();
+
+    Ok(KsSourceState {
+        resource_version,
+        key_present,
+        payload,
+    })
+}
+
+/// Met à jour le status avec un message générique (anonymise les noms de Secret/clé)
+/// pour éviter la fuite par oracle d'existence depuis status.error_message.
+/// Le détail reste dans les tracing logs.
+async fn record_source_error_in_status(
+    secret_cr: &Arc<ScalewaySecret>,
+    api: &Api<ScalewaySecret>,
+    current_status: &ScalewaySecretStatus,
+    error: &OperatorError,
+) {
+    tracing::warn!(
+        name = %secret_cr.name_any(),
+        namespace = %secret_cr.namespace().unwrap_or_default(),
+        error = %error,
+        "ScalewaySecret source read failed"
+    );
+    let mut status = current_status.clone();
+    status.error_message = Some(STATUS_ERROR_GENERIC.to_string());
+    status.sync_state = "Error".to_string();
+    let _ = update_secret_status(secret_cr, api, status).await;
+}
+
 /// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
 struct SecretReconcileInput {
     deletion_requested: bool,
@@ -1445,49 +1543,26 @@ async fn reconcile_scaleway_secret_inner(
 
     let current_status = secret_cr.status.clone().unwrap_or_default();
 
-    // Lire le resourceVersion du Secret K8s source + présence de la clé si possible.
-    // Vérifie d'abord le label d'opt-in pour prévenir le Confused Deputy :
-    // un utilisateur avec `create scalewaysecrets` ne doit pas pouvoir lire
-    // un Secret qu'il ne possède pas via le ServiceAccount privilégié de l'opérateur.
-    let (current_resource_version, current_key_present) =
+    // Lecture UNIQUE du Secret K8s source — la TOCTOU sur le label d'opt-in est éliminée
+    // car la valeur extraite (payload) provient du MÊME `get` qui a vérifié l'opt-in.
+    // Les branches CreateAndSyncSecret et PushNewVersion réutilisent `ks_payload`
+    // au lieu de re-lire le Secret (et de risquer une fenêtre de race).
+    let (current_resource_version, current_key_present, mut ks_payload) =
         if !deletion_requested && source_configured {
-            if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
-                let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
-                match ks_api.get(&ks_ref.name).await {
-                    Ok(ks) => {
-                        let opt_in = ks
-                            .metadata
-                            .labels
-                            .as_ref()
-                            .and_then(|l| l.get("scaleway.mathieubodin.io/allow-operator-read"))
-                            .map(|v| v == "true")
-                            .unwrap_or(false);
-                        if !opt_in {
-                            let e = OperatorError::SecretOptInMissing(format!(
-                                "Kubernetes Secret '{}' must have label \
-                                 'scaleway.mathieubodin.io/allow-operator-read: \"true\"'",
-                                ks_ref.name
-                            ));
-                            let mut status = current_status.clone();
-                            status.error_message = Some(e.for_status());
-                            status.sync_state = "Error".to_string();
-                            let _ = update_secret_status(&secret_cr, &api, status).await;
-                            return Err(e);
-                        }
-                        let key_present = ks
-                            .data
-                            .as_ref()
-                            .map(|d| d.contains_key(&ks_ref.key))
-                            .unwrap_or(false);
-                        (ks.metadata.resource_version.clone(), key_present)
-                    }
-                    Err(_) => (None, false),
+            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
+            match read_k8s_secret_source(&ctx, &namespace, ks_ref).await {
+                Ok(state) => (state.resource_version, state.key_present, state.payload),
+                Err(OperatorError::SecretNotFound(_)) => {
+                    // Cas "Secret K8s absent" — traité par le decide layer via ErrorKsSecretNotFound.
+                    (None, false, None)
                 }
-            } else {
-                (None, false)
+                Err(e) => {
+                    record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
+                    return Err(e);
+                }
             }
         } else {
-            (None, false)
+            (None, false, None)
         };
 
     let input = SecretReconcileInput {
@@ -1538,14 +1613,13 @@ async fn reconcile_scaleway_secret_inner(
                 .as_ref()
                 .map(|r| r.name.as_str())
                 .unwrap_or("<unknown>");
+            // Détail dans les logs uniquement ; status reste générique pour éviter
+            // l'oracle de présence des Secrets via status.error_message.
             let e = OperatorError::SecretNotFound(format!(
                 "Kubernetes Secret '{}' not found in namespace '{}'",
                 ks_name, namespace
             ));
-            let mut status = current_status;
-            status.error_message = Some(e.for_status());
-            status.sync_state = "Error".to_string();
-            let _ = update_secret_status(&secret_cr, &api, status).await;
+            record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
             Err(e)
         }
 
@@ -1557,14 +1631,14 @@ async fn reconcile_scaleway_secret_inner(
                 .as_ref()
                 .map(|r| (r.name.as_str(), r.key.as_str()))
                 .unwrap_or(("<unknown>", "<unknown>"));
-            let e = OperatorError::SecretNotFound(format!(
+            // SecretKeyNotFound est permanent : retry exponentiel infini sur une clé
+            // absente est un DoS auto-infligé puisque seule une édition du CR ou du
+            // Secret la fait apparaître. Détail dans logs, status générique.
+            let e = OperatorError::SecretKeyNotFound(format!(
                 "Key '{}' not found in Kubernetes Secret '{}' in namespace '{}'",
                 ks_key, ks_name, namespace
             ));
-            let mut status = current_status;
-            status.error_message = Some(e.for_status());
-            status.sync_state = "Error".to_string();
-            let _ = update_secret_status(&secret_cr, &api, status).await;
+            record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
             Err(e)
         }
 
@@ -1633,25 +1707,11 @@ async fn reconcile_scaleway_secret_inner(
                 })?,
             };
 
-            // Lire la valeur du K8s Secret pour la pousser
-            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
-            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
-            let ks = ks_api.get(&ks_ref.name).await.map_err(|e| {
-                measurer.set_outcome(ReconcileOutcome::Error);
-                OperatorError::KubeError(e)
-            })?;
-            let payload = ks
-                .data
-                .as_ref()
-                .and_then(|d| d.get(&ks_ref.key))
-                .map(|b| b.0.clone())
-                .ok_or_else(|| {
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    OperatorError::SecretNotFound(format!(
-                        "Key '{}' not found in Secret '{}'",
-                        ks_ref.key, ks_ref.name
-                    ))
-                })?;
+            // Payload et resource_version proviennent de la lecture UNIQUE en amont —
+            // évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
+            let payload = ks_payload.take().expect(
+                "decide_next_action_secret guarantees key_present and current_resource_version",
+            );
 
             let revision = call_scaleway(&ctx, || {
                 ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
@@ -1664,7 +1724,7 @@ async fn reconcile_scaleway_secret_inner(
             let mut status = current_status;
             status.scaleway_id = Some(scaleway_id);
             status.current_version = Some(revision);
-            status.last_synced_resource_version = ks.metadata.resource_version.clone();
+            status.last_synced_resource_version = current_resource_version.clone();
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -1688,24 +1748,10 @@ async fn reconcile_scaleway_secret_inner(
                 }
             };
 
-            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
-            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
-            let ks = ks_api.get(&ks_ref.name).await.map_err(|e| {
-                measurer.set_outcome(ReconcileOutcome::Error);
-                OperatorError::KubeError(e)
-            })?;
-            let payload = ks
-                .data
-                .as_ref()
-                .and_then(|d| d.get(&ks_ref.key))
-                .map(|b| b.0.clone())
-                .ok_or_else(|| {
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    OperatorError::SecretNotFound(format!(
-                        "Key '{}' not found in Secret '{}'",
-                        ks_ref.key, ks_ref.name
-                    ))
-                })?;
+            // Payload et resource_version proviennent de la lecture UNIQUE en amont.
+            let payload = ks_payload.take().expect(
+                "decide_next_action_secret guarantees key_present and current_resource_version",
+            );
 
             let old_revision = current_status.current_version;
 
@@ -1737,7 +1783,7 @@ async fn reconcile_scaleway_secret_inner(
 
             let mut status = current_status;
             status.current_version = Some(new_revision);
-            status.last_synced_resource_version = ks.metadata.resource_version.clone();
+            status.last_synced_resource_version = current_resource_version.clone();
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -2583,6 +2629,61 @@ mod tests {
             decide_next_action_secret(&input),
             SecretReconcileDecision::ErrorKsSecretNotFound
         ));
+    }
+
+    // ── is_opt_in_granted (label contract) ────────────────────────────────────
+
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_opt_in_granted_only_when_label_value_is_exactly_true() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "true".to_string(),
+        );
+        assert!(is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_no_labels() {
+        assert!(!is_opt_in_granted(None));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_absent() {
+        let labels: BTreeMap<String, String> = BTreeMap::new();
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_capitalized() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "True".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_yes() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "yes".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_empty_string() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
     }
 
     #[test]
