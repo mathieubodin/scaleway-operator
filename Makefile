@@ -160,6 +160,7 @@ coverage-kind-text: check-llvm-cov check-kind check-docker check-helm ## Coverag
 	@cargo llvm-cov report
 
 coverage-lcov: check-llvm-cov ## Teste l'application et produit un rapport lcov (pour Codecov CI)
+	cargo llvm-cov clean --workspace 2>/dev/null || true
 	mkdir -p $(COVERAGE_DIR)
 	cargo llvm-cov --lib --tests --lcov --output-path $(COVERAGE_DIR)/lcov.info
 

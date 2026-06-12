@@ -60,8 +60,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/
-          key: ${{ runner.os }}-cargo-pr-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-pr-
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-cov-
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912  # v2
@@ -73,7 +73,10 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
+        # Secrets unavailable on fork PRs — upload is best-effort, never blocks the job
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           files: target/llvm-cov/lcov.info
           flags: unit
           token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
