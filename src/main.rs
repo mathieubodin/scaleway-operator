@@ -3,8 +3,8 @@ use kube::runtime::Controller;
 use kube::{Api, Client};
 use scaleway_operator::{
     context::{CircuitBreakerState, Context},
-    reconcilers::{error_policy, reconcile_instance, reconcile_load_balancer},
-    resources::{Instance, LoadBalancer},
+    reconcilers::{error_policy, reconcile_instance, reconcile_load_balancer, reconcile_scaleway_secret},
+    resources::{Instance, LoadBalancer, ScalewaySecret},
     scaleway::ScalewayClient,
     server::run_axum_server,
 };
@@ -73,7 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let instance_api = Api::<Instance>::all(client.clone());
-    let lb_api = Api::<LoadBalancer>::all(client);
+    let lb_api = Api::<LoadBalancer>::all(client.clone());
+    let secret_api = Api::<ScalewaySecret>::all(client);
 
     let instance_ctrl = Controller::new(instance_api, Default::default())
         .run(
@@ -99,7 +100,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-    tokio::join!(instance_ctrl, lb_ctrl);
+    let secret_ctrl = Controller::new(secret_api, Default::default())
+        .run(
+            reconcile_scaleway_secret,
+            |obj, err, ctx| error_policy("scalewayssecret", obj, err, ctx),
+            Arc::clone(&context),
+        )
+        .for_each(|res| async move {
+            if let Err(e) = res {
+                tracing::error!(error = %e, "ScalewaySecret reconciliation failed");
+            }
+        });
+
+    tokio::join!(instance_ctrl, lb_ctrl, secret_ctrl);
 
     Ok(())
 }
