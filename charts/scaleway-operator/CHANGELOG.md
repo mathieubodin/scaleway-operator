@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
+
+
+### Documentation
+
+* **ops:** fix sub-issues API + style cleanup ([#107](https://github.com/mathieubodin/scaleway-operator/issues/107)) ([90300b0](https://github.com/mathieubodin/scaleway-operator/commit/90300b053ba61e6a598ea950996a13038f888bbd))
+
 ## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.10...scaleway-operator-v0.1.11) (2026-06-12)
 
 
