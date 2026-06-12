@@ -625,18 +625,3 @@ async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
         "Finalizer should be present after first reconcile"
     );
 }
-
-#[tokio::test]
-#[ignore = "not yet implemented — requires live Scaleway credentials with LB permissions"]
-async fn test_loadbalancer_create_sync_delete() {
-    // Full lifecycle test: apply CR → observe scaleway_id → delete CR → observe finalizer removal.
-    // This test requires valid Scaleway credentials in the scaleway-ns-creds-scw-test-editor secret.
-    let _fixture = TestFixture::for_namespace(NS_EDITOR).await;
-    // Implementation deferred — requires a live Scaleway account with LB permissions.
-    // Steps:
-    // 1. Apply a LoadBalancer CR
-    // 2. Wait up to 60s for status.scaleway_id to be populated
-    // 3. Delete the CR
-    // 4. Wait up to 60s for finalizer to be removed
-    todo!("implement full LB lifecycle integration test")
-}

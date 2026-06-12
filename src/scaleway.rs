@@ -1093,45 +1093,51 @@ mod tests {
     #[tokio::test]
     async fn test_delete_instance_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("DELETE", "/instance/v1/zones/fr-par-1/servers/srv-del")
             .with_status(204)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.delete_instance("fr-par-1", "srv-del").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_delete_instance_404_is_success() {
         // Idempotence : instance déjà supprimée → Ok(())
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("DELETE", "/instance/v1/zones/fr-par-1/servers/srv-gone")
             .with_status(404)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.delete_instance("fr-par-1", "srv-gone").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_verify_project_access_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("GET", "/account/v3/projects/proj-abc")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"id": "proj-abc"}"#)
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.verify_project_access("proj-abc").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1363,13 +1369,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_load_balancer_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock(
                 "DELETE",
                 mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-del".to_string()),
             )
             .with_status(204)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
@@ -1378,18 +1385,20 @@ mod tests {
             .delete_load_balancer("fr-par-1", "lb-del", true)
             .await
             .is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_delete_load_balancer_404_is_idempotent() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock(
                 "DELETE",
                 mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-gone".to_string()),
             )
             .with_status(404)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
@@ -1398,6 +1407,7 @@ mod tests {
             .delete_load_balancer("fr-par-1", "lb-gone", true)
             .await
             .is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
