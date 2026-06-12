@@ -44,6 +44,10 @@ y compris les trailers `Claude-*` valides — et les requêtes d'agrégation sou
   Stop (le sens correct est de sortir quand la valeur est `true` — continuation déclenchée par un hook Stop — sinon le
   hook ne compte jamais rien dans le cas nominal), et baseline non remise à zéro au changement de session dans le hook
   SessionStart (un commit avant le premier event Stop de la nouvelle session produisait un delta faux).
+- **Chemin jq du `usage` dans les transcripts** : le hook Stop sommait `.usage` à la racine des entrées JSONL, mais
+  Claude Code l'imbrique sous `.message.usage` — tous les totaux sortaient à 0 et les trailers affichaient
+  `Delta: 0 / Total: 0` sans aucune erreur. Troisième sous-comptage silencieux de cette feature : valider chaque
+  maillon contre une valeur attendue non nulle, pas seulement contre « le script ne plante pas ».
 
 ## Solution
 
