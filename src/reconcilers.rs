@@ -1361,7 +1361,9 @@ enum SecretReconcileDecision {
     /// Aucun secret Scaleway connu — créer et pousser la première version.
     CreateAndSyncSecret,
     /// Secret Scaleway connu, valeur changée — pousser une nouvelle version.
-    PushNewVersion { scaleway_id: String },
+    PushNewVersion {
+        scaleway_id: String,
+    },
     /// Valeur inchangée — requeue périodique.
     AlreadySynced,
     /// Suppression demandée avec un secret Scaleway connu.
@@ -1533,17 +1535,18 @@ async fn reconcile_scaleway_secret_inner(
         SecretReconcileDecision::CreateAndSyncSecret => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
 
-            let project_id = match get_project_id_from_namespace_resource(secret_cr.as_ref(), &ctx).await {
-                Ok(pid) => pid,
-                Err(e) => {
-                    let mut status = current_status;
-                    status.error_message = Some(e.for_status());
-                    status.sync_state = "Error".to_string();
-                    let _ = update_secret_status(&secret_cr, &api, status).await;
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    return Err(e);
-                }
-            };
+            let project_id =
+                match get_project_id_from_namespace_resource(secret_cr.as_ref(), &ctx).await {
+                    Ok(pid) => pid,
+                    Err(e) => {
+                        let mut status = current_status;
+                        status.error_message = Some(e.for_status());
+                        status.sync_state = "Error".to_string();
+                        let _ = update_secret_status(&secret_cr, &api, status).await;
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        return Err(e);
+                    }
+                };
 
             let ns_client = match get_namespace_client(&ctx, &namespace).await {
                 Ok(c) => c,
@@ -1577,24 +1580,21 @@ async fn reconcile_scaleway_secret_inner(
                     );
                     existing_id
                 }
-                None => {
-                    call_scaleway(&ctx, || {
-                        ns_client.create_scaleway_secret(
-                            &secret_cr.spec.region,
-                            &secret_cr.spec.name,
-                            &project_id,
-                            secret_cr.spec.description.as_deref(),
-                            &secret_cr.spec.tags,
-                            &namespace,
-                            &cr_name,
-                        )
-                    })
-                    .await
-                    .map_err(|e| {
-                        measurer.set_outcome(ReconcileOutcome::Error);
-                        e
-                    })?
-                }
+                None => call_scaleway(&ctx, || {
+                    ns_client.create_scaleway_secret(
+                        &secret_cr.spec.region,
+                        &secret_cr.spec.name,
+                        &project_id,
+                        secret_cr.spec.description.as_deref(),
+                        &secret_cr.spec.tags,
+                        &namespace,
+                        &cr_name,
+                    )
+                })
+                .await
+                .inspect_err(|_| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                })?,
             };
 
             // Lire la valeur du K8s Secret pour la pousser
@@ -1621,9 +1621,8 @@ async fn reconcile_scaleway_secret_inner(
                 ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
             })
             .await
-            .map_err(|e| {
+            .inspect_err(|_| {
                 measurer.set_outcome(ReconcileOutcome::Error);
-                e
             })?;
 
             let hash = ScalewayClient::compute_payload_hash(&payload);
@@ -1680,9 +1679,8 @@ async fn reconcile_scaleway_secret_inner(
                 ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
             })
             .await
-            .map_err(|e| {
+            .inspect_err(|_| {
                 measurer.set_outcome(ReconcileOutcome::Error);
-                e
             })?;
 
             // Désactiver l'ancienne version (idempotent si déjà désactivée)
@@ -1806,8 +1804,12 @@ async fn add_secret_finalizer(secret_cr: &ScalewaySecret, api: &Api<ScalewaySecr
     let mut finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
     finalizers.push(SECRET_FINALIZER.to_string());
     let patch = serde_json::json!({ "metadata": { "finalizers": finalizers } });
-    api.patch(&secret_cr.name_any(), &PatchParams::default(), &Patch::Merge(patch))
-        .await?;
+    api.patch(
+        &secret_cr.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
     Ok(())
 }
 

@@ -508,6 +508,7 @@ impl ScalewayClient {
         format!("{:x}", hash)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_scaleway_secret(
         &self,
         region: &str,
@@ -577,7 +578,12 @@ impl ScalewayClient {
             .http_client
             .get(&url)
             .query(&[("project_id", project_id)])
-            .query(&tags.iter().map(|t| ("tags", t.as_str())).collect::<Vec<_>>())
+            .query(
+                &tags
+                    .iter()
+                    .map(|t| ("tags", t.as_str()))
+                    .collect::<Vec<_>>(),
+            )
             .header("X-Auth-Token", &self.token)
             .send()
             .await?;
@@ -638,10 +644,9 @@ impl ScalewayClient {
         }
 
         let data: Value = response.json().await?;
-        data["revision"]
-            .as_u64()
-            .map(|r| r as u32)
-            .ok_or_else(|| OperatorError::Unknown("No revision in create_version response".to_string()))
+        data["revision"].as_u64().map(|r| r as u32).ok_or_else(|| {
+            OperatorError::Unknown("No revision in create_version response".to_string())
+        })
     }
 
     /// Disables a specific version of a Scaleway secret. Idempotent — if the

@@ -7,10 +7,10 @@ metadata:
     {{- include "scaleway-operator.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["scaleway.mathieubodin.io"]
-  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
+  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status", "scalewaysecrets", "scalewaysecrets/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["scaleway.mathieubodin.io"]
-  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
+  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers", "scalewaysecrets/finalizers"]
   verbs: ["update"]
 - apiGroups: ["scaleway.mathieubodin.io"]
   resources: ["namespaceroles"]
@@ -20,6 +20,9 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["events"]
