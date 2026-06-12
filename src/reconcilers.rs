@@ -2,7 +2,10 @@ use crate::context::Context;
 use crate::context::{extract_project_id_from_namespace, get_scaleway_role_for_namespace};
 use crate::error::{OperatorError, Result};
 use crate::metrics::{OperatorMetrics, ReconcileOutcome};
-use crate::resources::{Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus};
+use crate::resources::{
+    Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus, ScalewaySecret,
+    ScalewaySecretStatus,
+};
 use crate::scaleway::ScalewayClient;
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Secret;
@@ -15,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const LB_FINALIZER: &str = "scaleway.mathieubodin.io/loadbalancer-finalizer";
+const SECRET_FINALIZER: &str = "scaleway.mathieubodin.io/secret-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 // ── ReconcileMeasurer — RAII timer that records duration + outcome ────────────
@@ -1321,10 +1325,505 @@ fn is_permanent_error(error: &OperatorError) -> bool {
             | OperatorError::InvalidLbType(_)
             | OperatorError::ConfigError(_)
             | OperatorError::ProjectAccessDenied(_)
+            | OperatorError::SecretSourceNotConfigured(_)
     )
     // CircuitBreakerOpen is explicitly transient — backoff applies, not await_change
     // KubeError, ScalewayError, NetworkError, SerializationError, FinalizationError, Unknown:
     // all transient by exhaustive exclusion
+}
+
+// ── ScalewaySecret reconciler ────────────────────────────────────────────────
+
+/// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
+struct SecretReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    /// La source (kubernetes_secret) est configurée dans le spec.
+    source_configured: bool,
+    /// ID Scaleway du secret, depuis le status.
+    scaleway_id: Option<String>,
+    /// Hash SHA-256 de la dernière valeur synchronisée, depuis le status.
+    last_synced_hash: Option<String>,
+    /// Hash SHA-256 de la valeur courante du K8s Secret.
+    /// None = K8s Secret introuvable ou clé absente (erreur transitoire).
+    current_value_hash: Option<String>,
+}
+
+#[derive(Debug)]
+enum SecretReconcileDecision {
+    SkipCircuitOpen,
+    AddFinalizer,
+    /// Pas de source valide dans le spec — erreur permanente.
+    ErrorSourceNotConfigured,
+    /// Le K8s Secret source est absent — erreur transitoire.
+    ErrorKsSecretNotFound,
+    /// Aucun secret Scaleway connu — créer et pousser la première version.
+    CreateAndSyncSecret,
+    /// Secret Scaleway connu, valeur changée — pousser une nouvelle version.
+    PushNewVersion { scaleway_id: String },
+    /// Valeur inchangée — requeue périodique.
+    AlreadySynced,
+    /// Suppression demandée avec un secret Scaleway connu.
+    DeleteSecret,
+    /// Suppression sans secret Scaleway connu — retirer le finalizer.
+    RemoveFinalizer,
+}
+
+fn decide_next_action_secret(input: &SecretReconcileInput) -> SecretReconcileDecision {
+    // 1. Suppression prioritaire
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(_) => SecretReconcileDecision::DeleteSecret,
+            None => SecretReconcileDecision::RemoveFinalizer,
+        };
+    }
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return SecretReconcileDecision::SkipCircuitOpen;
+    }
+    // 3. Finalizer
+    if !input.finalizer_present {
+        return SecretReconcileDecision::AddFinalizer;
+    }
+    // 4. Source non configurée (permanent)
+    if !input.source_configured {
+        return SecretReconcileDecision::ErrorSourceNotConfigured;
+    }
+    // 5. K8s Secret introuvable (transitoire)
+    if input.current_value_hash.is_none() {
+        return SecretReconcileDecision::ErrorKsSecretNotFound;
+    }
+    // 6. Pas de secret Scaleway connu — créer
+    if input.scaleway_id.is_none() {
+        return SecretReconcileDecision::CreateAndSyncSecret;
+    }
+    // 7. Valeur changée — nouvelle version
+    if input.current_value_hash != input.last_synced_hash {
+        return SecretReconcileDecision::PushNewVersion {
+            scaleway_id: input.scaleway_id.clone().unwrap(),
+        };
+    }
+    // 8. Rien à faire
+    SecretReconcileDecision::AlreadySynced
+}
+
+pub async fn reconcile_scaleway_secret(
+    secret_cr: Arc<ScalewaySecret>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "scalewayssecret/{}/{}",
+        secret_cr.namespace().unwrap_or_default(),
+        secret_cr.name_any()
+    );
+    let result = reconcile_scaleway_secret_inner(secret_cr, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_scaleway_secret_inner(
+    secret_cr: Arc<ScalewaySecret>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let namespace = secret_cr.namespace().unwrap_or_default();
+    let api: Api<ScalewaySecret> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    tracing::info!(
+        name = %secret_cr.name_any(),
+        namespace = %namespace,
+        "Reconciling ScalewaySecret"
+    );
+
+    let deletion_requested = secret_cr.metadata.deletion_timestamp.is_some();
+    let circuit_open = ctx.is_circuit_open();
+    let finalizer_present = secret_cr
+        .metadata
+        .finalizers
+        .as_ref()
+        .unwrap_or(&vec![])
+        .contains(&SECRET_FINALIZER.to_string());
+
+    let source_configured = secret_cr.spec.source.kubernetes_secret.is_some();
+
+    // Lire la valeur courante du K8s Secret source si possible
+    let current_value_hash = if !deletion_requested && source_configured {
+        if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
+            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
+            match ks_api.get(&ks_ref.name).await {
+                Ok(ks) => {
+                    let value = ks
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.get(&ks_ref.key))
+                        .map(|b| b.0.clone());
+                    value.as_deref().map(ScalewayClient::compute_payload_hash)
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let current_status = secret_cr.status.clone().unwrap_or_default();
+
+    let input = SecretReconcileInput {
+        deletion_requested,
+        circuit_open,
+        finalizer_present,
+        source_configured,
+        scaleway_id: current_status.scaleway_id.clone(),
+        last_synced_hash: current_status.last_synced_value_hash.clone(),
+        current_value_hash: current_value_hash.clone(),
+    };
+
+    let decision = decide_next_action_secret(&input);
+
+    match decision {
+        SecretReconcileDecision::SkipCircuitOpen => {
+            tracing::warn!(
+                name = %secret_cr.name_any(),
+                "Scaleway API circuit breaker is open — skipping secret reconciliation"
+            );
+            Err(OperatorError::CircuitBreakerOpen)
+        }
+
+        SecretReconcileDecision::AddFinalizer => {
+            add_secret_finalizer(&secret_cr, &api).await?;
+            Ok(Action::requeue(Duration::from_secs(5)))
+        }
+
+        SecretReconcileDecision::ErrorSourceNotConfigured => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let e = OperatorError::SecretSourceNotConfigured(
+                "spec.source must have kubernetes_secret configured".to_string(),
+            );
+            let mut status = current_status;
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_secret_status(&secret_cr, &api, status).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
+            Err(e)
+        }
+
+        SecretReconcileDecision::ErrorKsSecretNotFound => {
+            let ks_name = secret_cr
+                .spec
+                .source
+                .kubernetes_secret
+                .as_ref()
+                .map(|r| r.name.as_str())
+                .unwrap_or("<unknown>");
+            let e = OperatorError::SecretNotFound(format!(
+                "Kubernetes Secret '{}' not found in namespace '{}'",
+                ks_name, namespace
+            ));
+            let mut status = current_status;
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_secret_status(&secret_cr, &api, status).await;
+            Err(e)
+        }
+
+        SecretReconcileDecision::CreateAndSyncSecret => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            let project_id = match get_project_id_from_namespace_resource(secret_cr.as_ref(), &ctx).await {
+                Ok(pid) => pid,
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_secret_status(&secret_cr, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_secret_status(&secret_cr, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            // Adoption : chercher un secret Scaleway existant avec les tags opérateur
+            let cr_name = secret_cr.name_any();
+            let scaleway_id = match call_scaleway(&ctx, || {
+                ns_client.find_scaleway_secret_by_tags(
+                    &secret_cr.spec.region,
+                    &project_id,
+                    &namespace,
+                    &cr_name,
+                )
+            })
+            .await?
+            {
+                Some(existing_id) => {
+                    tracing::warn!(
+                        name = %cr_name,
+                        scaleway_id = %existing_id,
+                        "Adopted existing Scaleway secret"
+                    );
+                    existing_id
+                }
+                None => {
+                    call_scaleway(&ctx, || {
+                        ns_client.create_scaleway_secret(
+                            &secret_cr.spec.region,
+                            &secret_cr.spec.name,
+                            &project_id,
+                            secret_cr.spec.description.as_deref(),
+                            &secret_cr.spec.tags,
+                            &namespace,
+                            &cr_name,
+                        )
+                    })
+                    .await
+                    .map_err(|e| {
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        e
+                    })?
+                }
+            };
+
+            // Lire la valeur du K8s Secret pour la pousser
+            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
+            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
+            let ks = ks_api.get(&ks_ref.name).await.map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+            let payload = ks
+                .data
+                .as_ref()
+                .and_then(|d| d.get(&ks_ref.key))
+                .map(|b| b.0.clone())
+                .ok_or_else(|| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    OperatorError::SecretNotFound(format!(
+                        "Key '{}' not found in Secret '{}'",
+                        ks_ref.key, ks_ref.name
+                    ))
+                })?;
+
+            let revision = call_scaleway(&ctx, || {
+                ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
+            })
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                e
+            })?;
+
+            let hash = ScalewayClient::compute_payload_hash(&payload);
+
+            let mut status = current_status;
+            status.scaleway_id = Some(scaleway_id);
+            status.current_version = Some(revision);
+            status.last_synced_value_hash = Some(hash);
+            status.sync_state = "Synced".to_string();
+            status.error_message = None;
+            update_secret_status(&secret_cr, &api, status).await?;
+
+            measurer.set_outcome(ReconcileOutcome::Created);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_secret_status(&secret_cr, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
+            let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
+            let ks = ks_api.get(&ks_ref.name).await.map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+            let payload = ks
+                .data
+                .as_ref()
+                .and_then(|d| d.get(&ks_ref.key))
+                .map(|b| b.0.clone())
+                .ok_or_else(|| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    OperatorError::SecretNotFound(format!(
+                        "Key '{}' not found in Secret '{}'",
+                        ks_ref.key, ks_ref.name
+                    ))
+                })?;
+
+            let old_revision = current_status.current_version;
+
+            let new_revision = call_scaleway(&ctx, || {
+                ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
+            })
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                e
+            })?;
+
+            // Désactiver l'ancienne version (idempotent si déjà désactivée)
+            if let Some(old_rev) = old_revision {
+                if let Err(e) = call_scaleway(&ctx, || {
+                    ns_client.disable_secret_version(&secret_cr.spec.region, &scaleway_id, old_rev)
+                })
+                .await
+                {
+                    tracing::warn!(
+                        name = %secret_cr.name_any(),
+                        revision = old_rev,
+                        error = %e,
+                        "Failed to disable old secret version — will retry"
+                    );
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            }
+
+            let hash = ScalewayClient::compute_payload_hash(&payload);
+
+            let mut status = current_status;
+            status.current_version = Some(new_revision);
+            status.last_synced_value_hash = Some(hash);
+            status.sync_state = "Synced".to_string();
+            status.error_message = None;
+            update_secret_status(&secret_cr, &api, status).await?;
+
+            measurer.set_outcome(ReconcileOutcome::Synced);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::AlreadySynced => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Synced);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::DeleteSecret => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            if let Some(scaleway_id) = &current_status.scaleway_id {
+                match get_namespace_client(&ctx, &namespace).await {
+                    Ok(ns_client) => {
+                        if let Err(e) = call_scaleway(&ctx, || {
+                            ns_client.delete_scaleway_secret(&secret_cr.spec.region, scaleway_id)
+                        })
+                        .await
+                        {
+                            tracing::error!(
+                                name = %secret_cr.name_any(),
+                                error = %e,
+                                "Failed to delete Scaleway secret"
+                            );
+                            measurer.set_outcome(ReconcileOutcome::Error);
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            name = %secret_cr.name_any(),
+                            scaleway_id = %scaleway_id,
+                            error = %e,
+                            "IAM Secret missing during deletion — skipping Scaleway API call"
+                        );
+                    }
+                }
+            }
+
+            // Retirer le finalizer
+            let finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+            let new_finalizers: Vec<String> = finalizers
+                .into_iter()
+                .filter(|f| f != SECRET_FINALIZER)
+                .collect();
+
+            let patch = serde_json::json!({ "metadata": { "finalizers": new_finalizers } });
+            api.patch(
+                &secret_cr.name_any(),
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+
+        SecretReconcileDecision::RemoveFinalizer => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+            let new_finalizers: Vec<String> = finalizers
+                .into_iter()
+                .filter(|f| f != SECRET_FINALIZER)
+                .collect();
+
+            let patch = serde_json::json!({ "metadata": { "finalizers": new_finalizers } });
+            api.patch(
+                &secret_cr.name_any(),
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+    }
+}
+
+async fn add_secret_finalizer(secret_cr: &ScalewaySecret, api: &Api<ScalewaySecret>) -> Result<()> {
+    let mut finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+    finalizers.push(SECRET_FINALIZER.to_string());
+    let patch = serde_json::json!({ "metadata": { "finalizers": finalizers } });
+    api.patch(&secret_cr.name_any(), &PatchParams::default(), &Patch::Merge(patch))
+        .await?;
+    Ok(())
+}
+
+async fn update_secret_status(
+    secret_cr: &ScalewaySecret,
+    api: &Api<ScalewaySecret>,
+    status: ScalewaySecretStatus,
+) -> Result<()> {
+    let patch = serde_json::json!({ "status": status });
+    api.patch_status(
+        &secret_cr.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
+    Ok(())
 }
 
 fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
@@ -2031,5 +2530,142 @@ mod tests {
 
         // Le LB est à la 1re tentative (30s), pas à la 2e (60s)
         assert_eq!(lb_action, Action::requeue(Duration::from_secs(30)));
+    }
+
+    // ── decide_next_action_secret unit tests ───────────────────────────────────
+
+    fn base_secret_input() -> SecretReconcileInput {
+        SecretReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            source_configured: true,
+            scaleway_id: Some("sec-abc123".to_string()),
+            last_synced_hash: Some("hash-v1".to_string()),
+            current_value_hash: Some("hash-v1".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_already_synced() {
+        let input = base_secret_input();
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::AlreadySynced
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_circuit_open_skips() {
+        let input = SecretReconcileInput {
+            circuit_open: true,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::SkipCircuitOpen
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_finalizer_absent_adds_finalizer() {
+        let input = SecretReconcileInput {
+            finalizer_present: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::AddFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_source_not_configured_returns_error() {
+        let input = SecretReconcileInput {
+            source_configured: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorSourceNotConfigured
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_ks_secret_not_found_returns_error() {
+        let input = SecretReconcileInput {
+            current_value_hash: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorKsSecretNotFound
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_no_scaleway_id_creates() {
+        let input = SecretReconcileInput {
+            scaleway_id: None,
+            last_synced_hash: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::CreateAndSyncSecret
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_hash_changed_pushes_new_version() {
+        let input = SecretReconcileInput {
+            current_value_hash: Some("hash-v2".to_string()),
+            ..base_secret_input()
+        };
+        match decide_next_action_secret(&input) {
+            SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+                assert_eq!(scaleway_id, "sec-abc123");
+            }
+            other => panic!("expected PushNewVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_with_scaleway_id_deletes() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::DeleteSecret
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_without_scaleway_id_removes_finalizer() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            scaleway_id: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::RemoveFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_takes_priority_over_circuit_open() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            circuit_open: true,
+            ..base_secret_input()
+        };
+        // Suppression prioritaire sur circuit breaker
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::DeleteSecret
+        ));
     }
 }
