@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
+
+
+### Features
+
+* **ops:** add Claude Code token hooks (SessionStart + Stop) ([1d28e73](https://github.com/mathieubodin/scaleway-operator/commit/1d28e739536b32d12315070213289bf7cd9e17a8))
+* **ops:** add git prepare-commit-msg hook for token trailers ([26dc4bb](https://github.com/mathieubodin/scaleway-operator/commit/26dc4bb00deabf18184d68a1c563130cf8bb896f))
+* **ops:** add milestone prep process — Field IDs, workflow, CONTRIBUTING.md ([0993d70](https://github.com/mathieubodin/scaleway-operator/commit/0993d70bb79ab28d206dce6c42fd93e9872b1ed0))
+* **ops:** add milestone prep process — Field IDs, workflow, CONTRIBUTING.md ([5164e36](https://github.com/mathieubodin/scaleway-operator/commit/5164e36d15345a4122f9e161e509411586a7f86f))
+* **ops:** add setup-dev.sh — install token tracking hooks ([e41cd39](https://github.com/mathieubodin/scaleway-operator/commit/e41cd39e35b44d844dbc30dee59736e0f8210c39))
+* **ops:** token tracking dans les commits git avec session ID ([75afd3a](https://github.com/mathieubodin/scaleway-operator/commit/75afd3a4bccd81fdcc1ae876243be81ddeff8400))
+
+
+### Bug Fixes
+
+* **ci:** use preinstalled kind binary on ubuntu-latest runner ([d7e5627](https://github.com/mathieubodin/scaleway-operator/commit/d7e5627cac0d9e19178aa0b821f6cc8d5b55529f))
+* **ci:** use preinstalled kind binary on ubuntu-latest runner ([e34e1ba](https://github.com/mathieubodin/scaleway-operator/commit/e34e1baa8d9e134110aeeeb932c309fceae3e532))
+* **ops:** address code review findings on token tracking hooks ([7f84fe3](https://github.com/mathieubodin/scaleway-operator/commit/7f84fe3d9c0b3cc7f559926970e98b4583d6b34c))
+* **ops:** correct stop hook gating and session baseline reset ([ac32658](https://github.com/mathieubodin/scaleway-operator/commit/ac32658403e88685b636fafc58ebe509bdc21530))
+* **ops:** inject trailers via git interpret-trailers ([1132310](https://github.com/mathieubodin/scaleway-operator/commit/11323100de24ae1920b5461d8412771c752a01fc))
+
+
+### Refactoring
+
+* **ops:** move prepare-commit-msg to .githooks/ (standard convention) ([8d6a063](https://github.com/mathieubodin/scaleway-operator/commit/8d6a063137250c0930b4b67b331ae9d312b07714))
+
+
+### Documentation
+
+* **claude:** surface GitHub Project v2 integration in agent context ([6a3583d](https://github.com/mathieubodin/scaleway-operator/commit/6a3583d7b9012e50dd799f9fb2412f808f6e0db2))
+* **ops:** add priority governance rule to milestone prep process section ([61a00f1](https://github.com/mathieubodin/scaleway-operator/commit/61a00f1d5d196c214616c407a0c6f78b0d0febc7))
+* **ops:** document token tracking setup and aggregation queries ([da2aa84](https://github.com/mathieubodin/scaleway-operator/commit/da2aa841cbdf88dda171430632568c19a596d41b))
+* **ops:** fix sub-issues API + style cleanup ([#107](https://github.com/mathieubodin/scaleway-operator/issues/107)) ([90300b0](https://github.com/mathieubodin/scaleway-operator/commit/90300b053ba61e6a598ea950996a13038f888bbd))
+* **ops:** rename "Project v2 Field IDs" to "Project Field IDs" ([fdef488](https://github.com/mathieubodin/scaleway-operator/commit/fdef48814f8d4f06d9920a14658182381d2c251e))
+* **solutions:** add .message.usage transcript pitfall to trailer learning ([58afa68](https://github.com/mathieubodin/scaleway-operator/commit/58afa68f16f3d92daff1ea0fa55391ff1df94a73))
+* **solutions:** compound learning on git trailer block poisoning ([120e21a](https://github.com/mathieubodin/scaleway-operator/commit/120e21a3253c1c527d0e8d3e82e50504b5664699))
+
 ## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.10...scaleway-operator-v0.1.11) (2026-06-03)
 
 
