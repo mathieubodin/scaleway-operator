@@ -198,7 +198,11 @@ pub struct KubernetesSecretRef {
 }
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
-#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "ScalewaySecret")]
+#[kube(
+    group = "scaleway.mathieubodin.io",
+    version = "v1",
+    kind = "ScalewaySecret"
+)]
 #[kube(namespaced)]
 #[kube(status = "ScalewaySecretStatus")]
 #[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scalewayId"}"#)]
@@ -233,9 +237,10 @@ pub struct ScalewaySecretStatus {
     #[serde(default)]
     pub current_version: Option<u32>,
 
-    /// Hash SHA-256 (hex) de la dernière valeur synchronisée — détection de rotation
+    /// resourceVersion du Secret K8s source à la dernière synchronisation.
+    /// Sert à détecter une rotation sans exposer de dérivée de la valeur.
     #[serde(default)]
-    pub last_synced_value_hash: Option<String>,
+    pub last_synced_resource_version: Option<String>,
 
     /// État de la synchronisation (Synced, Syncing, Error)
     #[serde(default)]
@@ -251,7 +256,7 @@ impl Default for ScalewaySecretStatus {
         Self {
             scaleway_id: None,
             current_version: None,
-            last_synced_value_hash: None,
+            last_synced_resource_version: None,
             sync_state: "Syncing".to_string(),
             error_message: None,
         }
@@ -384,7 +389,7 @@ mod tests {
         let status = ScalewaySecretStatus::default();
         assert_eq!(status.scaleway_id, None);
         assert_eq!(status.current_version, None);
-        assert_eq!(status.last_synced_value_hash, None);
+        assert_eq!(status.last_synced_resource_version, None);
         assert_eq!(status.sync_state, "Syncing");
         assert_eq!(status.error_message, None);
     }
@@ -394,7 +399,7 @@ mod tests {
         let status = ScalewaySecretStatus {
             scaleway_id: Some("sec-abc123".to_string()),
             current_version: Some(3),
-            last_synced_value_hash: Some("a".repeat(64)),
+            last_synced_resource_version: Some("12345".to_string()),
             sync_state: "Synced".to_string(),
             error_message: None,
         };
@@ -409,7 +414,7 @@ mod tests {
         let status: ScalewaySecretStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status.scaleway_id, None);
         assert_eq!(status.current_version, None);
-        assert_eq!(status.last_synced_value_hash, None);
+        assert_eq!(status.last_synced_resource_version, None);
         assert_eq!(status.sync_state, "Syncing");
     }
 

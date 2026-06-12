@@ -3,7 +3,9 @@ use kube::runtime::Controller;
 use kube::{Api, Client};
 use scaleway_operator::{
     context::{CircuitBreakerState, Context},
-    reconcilers::{error_policy, reconcile_instance, reconcile_load_balancer, reconcile_scaleway_secret},
+    reconcilers::{
+        error_policy, reconcile_instance, reconcile_load_balancer, reconcile_scaleway_secret,
+    },
     resources::{Instance, LoadBalancer, ScalewaySecret},
     scaleway::ScalewayClient,
     server::run_axum_server,

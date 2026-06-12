@@ -1343,11 +1343,12 @@ struct SecretReconcileInput {
     source_configured: bool,
     /// ID Scaleway du secret, depuis le status.
     scaleway_id: Option<String>,
-    /// Hash SHA-256 de la dernière valeur synchronisée, depuis le status.
-    last_synced_hash: Option<String>,
-    /// Hash SHA-256 de la valeur courante du K8s Secret.
-    /// None = K8s Secret introuvable ou clé absente (erreur transitoire).
-    current_value_hash: Option<String>,
+    /// resourceVersion du Secret K8s source à la dernière synchronisation,
+    /// depuis le status.
+    last_synced_resource_version: Option<String>,
+    /// resourceVersion courant du Secret K8s source.
+    /// None = K8s Secret introuvable (erreur transitoire).
+    current_resource_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1393,15 +1394,15 @@ fn decide_next_action_secret(input: &SecretReconcileInput) -> SecretReconcileDec
         return SecretReconcileDecision::ErrorSourceNotConfigured;
     }
     // 5. K8s Secret introuvable (transitoire)
-    if input.current_value_hash.is_none() {
+    if input.current_resource_version.is_none() {
         return SecretReconcileDecision::ErrorKsSecretNotFound;
     }
     // 6. Pas de secret Scaleway connu — créer
     if input.scaleway_id.is_none() {
         return SecretReconcileDecision::CreateAndSyncSecret;
     }
-    // 7. Valeur changée — nouvelle version
-    if input.current_value_hash != input.last_synced_hash {
+    // 7. Source modifiée depuis la dernière synchro — nouvelle version
+    if input.current_resource_version != input.last_synced_resource_version {
         return SecretReconcileDecision::PushNewVersion {
             scaleway_id: input.scaleway_id.clone().unwrap(),
         };
@@ -1452,11 +1453,11 @@ async fn reconcile_scaleway_secret_inner(
 
     let current_status = secret_cr.status.clone().unwrap_or_default();
 
-    // Lire la valeur courante du K8s Secret source si possible.
+    // Lire le resourceVersion du Secret K8s source si possible.
     // Vérifie d'abord le label d'opt-in pour prévenir le Confused Deputy :
     // un utilisateur avec `create scalewaysecrets` ne doit pas pouvoir lire
     // un Secret qu'il ne possède pas via le ServiceAccount privilégié de l'opérateur.
-    let current_value_hash = if !deletion_requested && source_configured {
+    let current_resource_version = if !deletion_requested && source_configured {
         if let Some(ks_ref) = &secret_cr.spec.source.kubernetes_secret {
             let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), &namespace);
             match ks_api.get(&ks_ref.name).await {
@@ -1480,12 +1481,7 @@ async fn reconcile_scaleway_secret_inner(
                         let _ = update_secret_status(&secret_cr, &api, status).await;
                         return Err(e);
                     }
-                    let value = ks
-                        .data
-                        .as_ref()
-                        .and_then(|d| d.get(&ks_ref.key))
-                        .map(|b| b.0.clone());
-                    value.as_deref().map(ScalewayClient::compute_payload_hash)
+                    ks.metadata.resource_version.clone()
                 }
                 Err(_) => None,
             }
@@ -1502,8 +1498,8 @@ async fn reconcile_scaleway_secret_inner(
         finalizer_present,
         source_configured,
         scaleway_id: current_status.scaleway_id.clone(),
-        last_synced_hash: current_status.last_synced_value_hash.clone(),
-        current_value_hash: current_value_hash.clone(),
+        last_synced_resource_version: current_status.last_synced_resource_version.clone(),
+        current_resource_version: current_resource_version.clone(),
     };
 
     let decision = decide_next_action_secret(&input);
@@ -1647,12 +1643,10 @@ async fn reconcile_scaleway_secret_inner(
                 measurer.set_outcome(ReconcileOutcome::Error);
             })?;
 
-            let hash = ScalewayClient::compute_payload_hash(&payload);
-
             let mut status = current_status;
             status.scaleway_id = Some(scaleway_id);
             status.current_version = Some(revision);
-            status.last_synced_value_hash = Some(hash);
+            status.last_synced_resource_version = ks.metadata.resource_version.clone();
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -1723,11 +1717,9 @@ async fn reconcile_scaleway_secret_inner(
                 }
             }
 
-            let hash = ScalewayClient::compute_payload_hash(&payload);
-
             let mut status = current_status;
             status.current_version = Some(new_revision);
-            status.last_synced_value_hash = Some(hash);
+            status.last_synced_resource_version = ks.metadata.resource_version.clone();
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -2565,8 +2557,8 @@ mod tests {
             finalizer_present: true,
             source_configured: true,
             scaleway_id: Some("sec-abc123".to_string()),
-            last_synced_hash: Some("hash-v1".to_string()),
-            current_value_hash: Some("hash-v1".to_string()),
+            last_synced_resource_version: Some("12345".to_string()),
+            current_resource_version: Some("12345".to_string()),
         }
     }
 
@@ -2618,7 +2610,7 @@ mod tests {
     #[test]
     fn test_secret_decide_ks_secret_not_found_returns_error() {
         let input = SecretReconcileInput {
-            current_value_hash: None,
+            current_resource_version: None,
             ..base_secret_input()
         };
         assert!(matches!(
@@ -2631,7 +2623,7 @@ mod tests {
     fn test_secret_decide_no_scaleway_id_creates() {
         let input = SecretReconcileInput {
             scaleway_id: None,
-            last_synced_hash: None,
+            last_synced_resource_version: None,
             ..base_secret_input()
         };
         assert!(matches!(
@@ -2641,9 +2633,9 @@ mod tests {
     }
 
     #[test]
-    fn test_secret_decide_hash_changed_pushes_new_version() {
+    fn test_secret_decide_source_changed_pushes_new_version() {
         let input = SecretReconcileInput {
-            current_value_hash: Some("hash-v2".to_string()),
+            current_resource_version: Some("67890".to_string()),
             ..base_secret_input()
         };
         match decide_next_action_secret(&input) {

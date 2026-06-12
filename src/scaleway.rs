@@ -3,7 +3,6 @@ use crate::resources::{InstanceSpec, LoadBalancerSpec};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client as ReqwestClient;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 const SCALEWAY_API_URL: &str = "https://api.scaleway.com";
@@ -499,13 +498,6 @@ impl ScalewayClient {
             format!("scaleway-operator-cr-namespace={}", namespace),
             format!("scaleway-operator-cr-name={}", cr_name),
         ]
-    }
-
-    /// Computes the SHA-256 hex digest of `data`. Stored in
-    /// `status.last_synced_value_hash` for rotation detection.
-    pub fn compute_payload_hash(data: &[u8]) -> String {
-        let hash = Sha256::digest(data);
-        format!("{:x}", hash)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1447,33 +1439,6 @@ mod tests {
     }
 
     // --- ScalewaySecret / Secret Manager ---
-
-    #[test]
-    fn test_compute_payload_hash_known_value() {
-        // SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
-        let hash = ScalewayClient::compute_payload_hash(b"hello");
-        assert_eq!(
-            hash,
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
-    }
-
-    #[test]
-    fn test_compute_payload_hash_empty() {
-        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        let hash = ScalewayClient::compute_payload_hash(b"");
-        assert_eq!(
-            hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-    }
-
-    #[test]
-    fn test_compute_payload_hash_rotation_produces_different_hash() {
-        let h1 = ScalewayClient::compute_payload_hash(b"secret-v1");
-        let h2 = ScalewayClient::compute_payload_hash(b"secret-v2");
-        assert_ne!(h1, h2);
-    }
 
     #[tokio::test]
     async fn test_create_scaleway_secret_success() {
