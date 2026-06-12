@@ -179,6 +179,85 @@ impl Default for LoadBalancerStatus {
     }
 }
 
+// ============== ScalewaySecret Resource ==============
+
+/// Source de la valeur du secret. Struct avec champs optionnels (pas un enum)
+/// pour permettre l'ajout futur de Vault sans casser le schéma CRD.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct SecretSource {
+    /// Lit la valeur depuis un Secret Kubernetes du même namespace
+    pub kubernetes_secret: Option<KubernetesSecretRef>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct KubernetesSecretRef {
+    /// Nom du Secret Kubernetes
+    pub name: String,
+    /// Clé dans `.data` du Secret
+    pub key: String,
+}
+
+#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[kube(group = "scaleway.mathieubodin.io", version = "v1", kind = "ScalewaySecret")]
+#[kube(namespaced)]
+#[kube(status = "ScalewaySecretStatus")]
+#[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scalewayId"}"#)]
+#[kube(printcolumn = r#"{"name":"Version","type":"integer","jsonPath":".status.currentVersion"}"#)]
+#[kube(printcolumn = r#"{"name":"State","type":"string","jsonPath":".status.syncState"}"#)]
+pub struct ScalewaySecretSpec {
+    /// Nom du secret dans Scaleway Secret Manager
+    pub name: String,
+
+    /// Région Scaleway (fr-par, nl-ams, pl-waw)
+    pub region: String,
+
+    /// Source de la valeur à synchroniser
+    pub source: SecretSource,
+
+    /// Description optionnelle
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Tags supplémentaires (en plus des tags operator injectés à la création)
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct ScalewaySecretStatus {
+    /// ID Scaleway du secret
+    #[serde(default)]
+    pub scaleway_id: Option<String>,
+
+    /// Numéro de révision de la version active
+    #[serde(default)]
+    pub current_version: Option<u32>,
+
+    /// Hash SHA-256 (hex) de la dernière valeur synchronisée — détection de rotation
+    #[serde(default)]
+    pub last_synced_value_hash: Option<String>,
+
+    /// État de la synchronisation (Synced, Syncing, Error)
+    #[serde(default)]
+    pub sync_state: String,
+
+    /// Message d'erreur si applicable
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+impl Default for ScalewaySecretStatus {
+    fn default() -> Self {
+        Self {
+            scaleway_id: None,
+            current_version: None,
+            last_synced_value_hash: None,
+            sync_state: "Syncing".to_string(),
+            error_message: None,
+        }
+    }
+}
+
 // ============== NamespaceRole Resource (Cluster-wide) ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -298,5 +377,64 @@ mod tests {
         let s2 = NamespaceRoleStatus::default();
         assert_eq!(s1.last_updated, s2.last_updated);
         assert_eq!(s1.validation_state, s2.validation_state);
+    }
+
+    #[test]
+    fn test_scaleway_secret_status_default_values() {
+        let status = ScalewaySecretStatus::default();
+        assert_eq!(status.scaleway_id, None);
+        assert_eq!(status.current_version, None);
+        assert_eq!(status.last_synced_value_hash, None);
+        assert_eq!(status.sync_state, "Syncing");
+        assert_eq!(status.error_message, None);
+    }
+
+    #[test]
+    fn test_scaleway_secret_status_serde_round_trip() {
+        let status = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(3),
+            last_synced_value_hash: Some("a".repeat(64)),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let decoded: ScalewaySecretStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, decoded);
+    }
+
+    #[test]
+    fn test_scaleway_secret_status_missing_optional_fields_deserializes() {
+        let json = r#"{"sync_state":"Syncing"}"#;
+        let status: ScalewaySecretStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.scaleway_id, None);
+        assert_eq!(status.current_version, None);
+        assert_eq!(status.last_synced_value_hash, None);
+        assert_eq!(status.sync_state, "Syncing");
+    }
+
+    #[test]
+    fn test_secret_source_kubernetes_only() {
+        let source = SecretSource {
+            kubernetes_secret: Some(KubernetesSecretRef {
+                name: "my-secret".to_string(),
+                key: "password".to_string(),
+            }),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let decoded: SecretSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(source, decoded);
+    }
+
+    #[test]
+    fn test_secret_source_empty_is_valid() {
+        // SecretSource avec tous les champs None est valide au niveau du type
+        // (la validation métier se fait dans le reconciler)
+        let source = SecretSource {
+            kubernetes_secret: None,
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let decoded: SecretSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(source, decoded);
     }
 }
