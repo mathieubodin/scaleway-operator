@@ -8,6 +8,10 @@ RUN apk add --no-cache musl-dev zig
 
 RUN cargo install --locked cargo-chef cargo-zigbuild
 
+# rust-toolchain.toml doit être présent AVANT rustup target add : sinon le
+# COPY . . du stage builder fait basculer rustup sur une toolchain fraîche
+# (channel stable) dépourvue des targets musl → E0463 can't find crate for std
+COPY rust-toolchain.toml .
 RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 
