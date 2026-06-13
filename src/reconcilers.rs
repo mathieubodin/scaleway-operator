@@ -1320,6 +1320,7 @@ async fn validate_lb_spec(
 // ── ScalewaySecret reconciler ────────────────────────────────────────────────
 
 const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
+const ALLOWED_CR_ANNOTATION: &str = "scaleway.mathieubodin.io/allowed-cr";
 const STATUS_ERROR_GENERIC: &str = "Source Secret unavailable (see operator logs)";
 
 /// État lu en UNE seule fois depuis le Secret K8s source.
@@ -1340,6 +1341,23 @@ fn is_opt_in_granted(labels: Option<&std::collections::BTreeMap<String, String>>
     labels
         .and_then(|l| l.get(OPT_IN_LABEL))
         .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
+/// Vérifie que l'annotation `allowed-cr` du Secret K8s correspond à
+/// `<cr_namespace>/<cr_name>`. Ferme le scénario où un utilisateur avec
+/// `patch secrets` (mais sans `get secrets`) pourrait labelliser un Secret
+/// qu'il ne possède pas. La cible est une chaîne strictement égale —
+/// pas de wildcard, pas de liste — pour ne lier qu'à UN CR donné.
+fn is_cr_allowed_for_secret(
+    annotations: Option<&std::collections::BTreeMap<String, String>>,
+    cr_namespace: &str,
+    cr_name: &str,
+) -> bool {
+    let expected = format!("{}/{}", cr_namespace, cr_name);
+    annotations
+        .and_then(|a| a.get(ALLOWED_CR_ANNOTATION))
+        .map(|v| v == &expected)
         .unwrap_or(false)
 }
 
@@ -1370,11 +1388,23 @@ fn map_kube_get_error(e: kube::error::Error, ks_name: &str, namespace: &str) -> 
 ///
 /// - opt-in label absent / != "true" → `SecretOptInMissing` permanent
 /// - sinon → `KsSourceState` avec resource_version, key_present, payload extraits
-fn parse_k8s_secret_source(ks: &Secret, ks_name: &str, key: &str) -> Result<KsSourceState> {
+fn parse_k8s_secret_source(
+    ks: &Secret,
+    ks_name: &str,
+    key: &str,
+    cr_namespace: &str,
+    cr_name: &str,
+) -> Result<KsSourceState> {
     if !is_opt_in_granted(ks.metadata.labels.as_ref()) {
         return Err(OperatorError::SecretOptInMissing(format!(
             "Kubernetes Secret '{}' must carry label '{}: \"true\"'",
             ks_name, OPT_IN_LABEL
+        )));
+    }
+    if !is_cr_allowed_for_secret(ks.metadata.annotations.as_ref(), cr_namespace, cr_name) {
+        return Err(OperatorError::SecretOptInMissing(format!(
+            "Kubernetes Secret '{}' must carry annotation '{}: \"{}/{}\"' to be read by this ScalewaySecret",
+            ks_name, ALLOWED_CR_ANNOTATION, cr_namespace, cr_name
         )));
     }
 
@@ -1401,13 +1431,15 @@ async fn read_k8s_secret_source(
     ctx: &Arc<Context>,
     namespace: &str,
     ks_ref: &crate::resources::KubernetesSecretRef,
+    cr_namespace: &str,
+    cr_name: &str,
 ) -> Result<KsSourceState> {
     let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), namespace);
     let ks = ks_api
         .get(&ks_ref.name)
         .await
         .map_err(|e| map_kube_get_error(e, &ks_ref.name, namespace))?;
-    parse_k8s_secret_source(&ks, &ks_ref.name, &ks_ref.key)
+    parse_k8s_secret_source(&ks, &ks_ref.name, &ks_ref.key, cr_namespace, cr_name)
 }
 
 /// Construit un status anonymisé pour les erreurs liées à la source Secret K8s.
@@ -1576,7 +1608,8 @@ async fn reconcile_scaleway_secret_inner(
     let (current_resource_version, current_key_present, mut ks_payload) =
         if !deletion_requested && source_configured {
             let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
-            match read_k8s_secret_source(&ctx, &namespace, ks_ref).await {
+            let cr_name = secret_cr.name_any();
+            match read_k8s_secret_source(&ctx, &namespace, ks_ref, &namespace, &cr_name).await {
                 Ok(state) => (state.resource_version, state.key_present, state.payload),
                 Err(OperatorError::SecretNotFound(_)) => {
                     // Cas "Secret K8s absent" — traité par le decide layer via ErrorKsSecretNotFound.
@@ -2903,6 +2936,7 @@ mod tests {
 
     fn k8s_secret(
         labels: Option<BTreeMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
         data: Option<BTreeMap<String, k8s_openapi::ByteString>>,
         rv: Option<&str>,
     ) -> Secret {
@@ -2911,6 +2945,7 @@ mod tests {
                 name: Some("db-pass".to_string()),
                 namespace: Some("team-a".to_string()),
                 labels,
+                annotations,
                 resource_version: rv.map(String::from),
                 ..Default::default()
             },
@@ -2919,10 +2954,22 @@ mod tests {
         }
     }
 
+    /// Construit l'annotation `allowed-cr` ciblant `team-a/db-sync` —
+    /// le couple CR utilisé dans tous les tests parse_k8s_secret_source_*.
+    fn allowed_cr_annotations() -> BTreeMap<String, String> {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/db-sync".to_string(),
+        );
+        a
+    }
+
     #[test]
     fn test_parse_k8s_secret_source_returns_opt_in_missing_when_label_absent() {
-        let ks = k8s_secret(None, None, Some("12345"));
-        let err = parse_k8s_secret_source(&ks, "db-pass", "password").unwrap_err();
+        let ks = k8s_secret(None, None, None, Some("12345"));
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
         let OperatorError::SecretOptInMissing(msg) = &err else {
             panic!("expected SecretOptInMissing, got {err:?}");
         };
@@ -2942,9 +2989,15 @@ mod tests {
             "password".to_string(),
             k8s_openapi::ByteString(b"s3cret".to_vec()),
         );
-        let ks = k8s_secret(Some(labels), Some(data), Some("12345"));
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
 
-        let state = parse_k8s_secret_source(&ks, "db-pass", "password").unwrap();
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
         assert_eq!(state.resource_version.as_deref(), Some("12345"));
         assert!(state.key_present);
@@ -2961,9 +3014,15 @@ mod tests {
             "other_key".to_string(),
             k8s_openapi::ByteString(b"x".to_vec()),
         );
-        let ks = k8s_secret(Some(labels), Some(data), Some("12345"));
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
 
-        let state = parse_k8s_secret_source(&ks, "db-pass", "password").unwrap();
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
         assert_eq!(state.resource_version.as_deref(), Some("12345"));
         assert!(!state.key_present, "key 'password' is not in .data");
@@ -2974,9 +3033,15 @@ mod tests {
     fn test_parse_k8s_secret_source_no_data_field_at_all() {
         let mut labels = BTreeMap::new();
         labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
-        let ks = k8s_secret(Some(labels), None, Some("12345"));
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            None,
+            Some("12345"),
+        );
 
-        let state = parse_k8s_secret_source(&ks, "db-pass", "password").unwrap();
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
         assert!(!state.key_present);
         assert!(state.payload.is_none());
@@ -3064,10 +3129,149 @@ mod tests {
             "password".to_string(),
             k8s_openapi::ByteString(b"s3cret".to_vec()),
         );
-        let ks = k8s_secret(None, Some(data), Some("12345"));
+        let ks = k8s_secret(None, None, Some(data), Some("12345"));
 
-        let err = parse_k8s_secret_source(&ks, "db-pass", "password").unwrap_err();
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
         assert!(matches!(err, OperatorError::SecretOptInMissing(_)));
+    }
+
+    // ── is_cr_allowed_for_secret (annotation must bind to identity) ───────────
+
+    #[test]
+    fn test_is_cr_allowed_for_secret_matches_namespace_name() {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/db-sync".to_string(),
+        );
+        assert!(is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_no_annotation() {
+        assert!(!is_cr_allowed_for_secret(None, "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_annotation_absent() {
+        let mut a = BTreeMap::new();
+        a.insert("some.other/annotation".to_string(), "value".to_string());
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_wrong_cr_name() {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/other-cr".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_wrong_namespace() {
+        // Si on ne comparait que le nom du CR, on ouvrirait un trou cross-namespace.
+        // Cette assertion verrouille la comparaison stricte ns + name.
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-b/db-sync".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_extra_whitespace() {
+        // Match strict : pas de trim, pas de tolérance — un espace parasite est
+        // un refus. Évite les surprises où une copie/colle insèrerait un blanc.
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            " team-a/db-sync ".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_opt_in_missing_when_cr_annotation_absent() {
+        // Label opt-in présent mais annotation `allowed-cr` absente :
+        // doit refuser la lecture (label-bypass via patch secrets sans annotation).
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(Some(labels), None, Some(data), Some("12345"));
+
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        let OperatorError::SecretOptInMissing(msg) = &err else {
+            panic!("expected SecretOptInMissing, got {err:?}");
+        };
+        assert!(
+            msg.contains(ALLOWED_CR_ANNOTATION),
+            "message should mention the annotation key: {msg}"
+        );
+        assert!(err.is_permanent_error());
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_opt_in_missing_when_cr_annotation_mismatches() {
+        // Label opt-in présent, annotation présente mais pointe vers un autre CR :
+        // doit refuser (le Secret est lié à un autre ScalewaySecret).
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/other-cr".to_string(),
+        );
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(Some(labels), Some(annotations), Some(data), Some("12345"));
+
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        let OperatorError::SecretOptInMissing(msg) = &err else {
+            panic!("expected SecretOptInMissing, got {err:?}");
+        };
+        assert!(
+            msg.contains(ALLOWED_CR_ANNOTATION),
+            "message should mention the annotation key: {msg}"
+        );
+        assert!(err.is_permanent_error());
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_success_requires_both_label_and_annotation() {
+        // Les deux conditions (label + annotation) sont présentes :
+        // le payload est extrait normalement.
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
+
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
+
+        assert!(state.key_present);
+        assert_eq!(state.payload.as_deref(), Some(b"s3cret".as_ref()));
     }
 
     #[test]

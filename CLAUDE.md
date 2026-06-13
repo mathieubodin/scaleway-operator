@@ -73,6 +73,18 @@ Chaque namespace hébergeant des `Instance` doit avoir :
 - L'annotation `scaleway.mathieubodin.io/project-id` sur le namespace
 - Une ressource `NamespaceRole` cluster-wide dont le `.metadata.name` correspond exactement au nom du namespace
 
+### Prérequis Secret source pour `ScalewaySecret`
+
+Un `ScalewaySecret` ne peut lire un Secret K8s source que si CES DEUX conditions sont remplies sur le Secret :
+
+- **Label opt-in** : `scaleway.mathieubodin.io/allow-operator-read: "true"` (chaîne exacte, pas de variante)
+- **Annotation d'identité** : `scaleway.mathieubodin.io/allowed-cr: "<cr-namespace>/<cr-name>"` strictement égale au CR qui le réfère
+
+Si l'une des deux est absente ou incorrecte, l'opérateur refuse la lecture et émet l'erreur
+permanente `SecretOptInMissing`. Ce double contrôle ferme la faille « label-bypass via
+`patch secrets` » : un utilisateur avec `patch secrets` (mais sans `get secrets`) ne peut pas
+labelliser un Secret qu'il ne possède pas pour le faire exfiltrer par un CR qu'il contrôle.
+
 ### CRDs déployées
 
 - `instances.scaleway.mathieubodin.io` (namespaced)
