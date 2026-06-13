@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.12...scaleway-operator-v0.1.13) (2026-06-12)
+
+
+### Bug Fixes
+
+* **docker:** resolve rust-toolchain override before adding musl targets ([c9edb2b](https://github.com/mathieubodin/scaleway-operator/commit/c9edb2b37e5bbdeabf400570c4f87b7a42ab1d58))
+* **docker:** resolve rust-toolchain override before adding musl targets ([78d150e](https://github.com/mathieubodin/scaleway-operator/commit/78d150e2431fd90fdbf807c7319957e791d1265a))
+
 ## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
 
 

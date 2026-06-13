@@ -87,7 +87,7 @@ Les variables `$MY_SCW_TOKEN` et `$MY_SCW_ORG_ID` doivent être définies dans v
 ```bash
 helm upgrade scaleway-operator \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator \
-    --version 0.1.11 \
+    --version 0.1.12 \
     --namespace scaleway-system \
     --install \
     --set scaleway.existingSecret=scaleway-credentials  # operator
