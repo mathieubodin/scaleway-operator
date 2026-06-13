@@ -1766,6 +1766,40 @@ async fn reconcile_scaleway_secret_inner(
                 })?,
             };
 
+            // Reserve-intent (issue #117) : ancrer le `scaleway_id` dans le status K8s
+            // AVANT tout `create_secret_version`. Sans ce patch préliminaire, si
+            // `create_secret_version` réussit puis le PATCH status final échoue
+            // (conflit 409, webhook tiers, kube-apiserver transient), le reconcile
+            // suivant ré-entre dans `CreateAndSyncSecret` (scaleway_id=None dans le
+            // status), `find_scaleway_secret_by_tags` adopte le secret existant, et
+            // un 2e `create_secret_version` crée une version active en double.
+            //
+            // Avec ce patch préliminaire :
+            //  - Si l'update échoue : pas encore de side-effect Scaleway sur les
+            //    versions → aucune dérive (le `?` propage l'Err avant
+            //    `create_secret_version`).
+            //  - Si `create_secret_version` réussit puis l'update final échoue : le
+            //    reconcile suivant aura `scaleway_id=Some(...)` et
+            //    `last_synced_resource_version=None`, donc `decide_next_action_secret`
+            //    retourne `PushNewVersion` (pas `CreateAndSyncSecret`). La branche
+            //    `PushNewVersion` applique le pattern #114 (update_status d'abord),
+            //    et le secret Scaleway ne sera pas re-créé.
+            //
+            // Trade-off : un cycle de réconciliation supplémentaire en cas d'échec
+            // entre étape 3 et étape 6, contre l'élimination du risque de
+            // duplication du secret Scaleway côté adoption.
+            let mut prelim_status = current_status.clone();
+            prelim_status.scaleway_id = Some(scaleway_id.clone());
+            prelim_status.sync_state = "Syncing".to_string();
+            prelim_status.error_message = None;
+            prelim_status.current_version = None;
+            prelim_status.last_synced_resource_version = None;
+            update_secret_status(&secret_cr, &api, prelim_status)
+                .await
+                .inspect_err(|_| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                })?;
+
             // Payload et resource_version proviennent de la lecture UNIQUE en amont —
             // évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
             let payload = ks_payload.take().expect(
@@ -2816,6 +2850,44 @@ mod tests {
             ),
             "decide layer must yield AlreadySynced when rvs match (post-push state — issue #114)"
         );
+    }
+
+    /// Documentation d'invariant pour l'issue #117 — couche PURE uniquement.
+    ///
+    /// Le pattern reserve-intent dans `CreateAndSyncSecret` patch un status
+    /// préliminaire avec `scaleway_id=Some(...)`, `current_version=None` et
+    /// `last_synced_resource_version=None` AVANT le `create_secret_version`.
+    /// Si la séquence est interrompue (échec entre étape 3 et étape 6), le
+    /// reconcile suivant doit retomber dans `PushNewVersion` (pas
+    /// `CreateAndSyncSecret`) pour éviter une re-création du secret Scaleway
+    /// via adoption + duplication de version.
+    ///
+    /// Ce test verrouille l'invariant decide qui rend cette stratégie correcte :
+    /// `scaleway_id=Some` + `last_synced_rv=None` + `current_rv=Some` produit
+    /// `PushNewVersion`. La branche PushNewVersion applique elle-même le
+    /// pattern #114 (update_status d'abord, disable best-effort).
+    ///
+    /// ⚠️ Ce test NE verrouille PAS la séquence de PATCH côté I/O — il
+    /// documente seulement l'invariant decide. Test mockito tracé dans #118.
+    #[test]
+    fn test_decide_after_interrupted_create_and_sync_is_push_new_version() {
+        let input = SecretReconcileInput {
+            scaleway_id: Some("sec-after-prelim".to_string()),
+            last_synced_resource_version: None,
+            current_resource_version: Some("rv-1".to_string()),
+            ..base_secret_input()
+        };
+        match decide_next_action_secret(&input) {
+            SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+                assert_eq!(
+                    scaleway_id, "sec-after-prelim",
+                    "decide must forward the persisted scaleway_id so the next reconcile reuses the existing Scaleway secret (issue #117)"
+                );
+            }
+            other => panic!(
+                "expected PushNewVersion after interrupted CreateAndSync (issue #117), got {other:?}"
+            ),
+        }
     }
 
     #[test]
