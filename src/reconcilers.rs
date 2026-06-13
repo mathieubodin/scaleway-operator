@@ -1955,13 +1955,20 @@ async fn reconcile_scaleway_secret_inner(
             // garantit qu'on n'atteint cette branche que si `key_present=true`,
             // donc `ks_payload` est forcément `Some`. La branche `None` ne peut
             // pas être atteinte ; on évite cependant `expect()` (panic) en
-            // retournant une erreur tracée.
+            // retournant une erreur tracée avec un `tracing::error!` haute
+            // visibilité (revue Opus correctness #118 : OperatorError::Unknown
+            // est transitoire — sans le log error, une régression du decide
+            // layer bouclerait silencieusement).
             let payload = ks_payload.take().ok_or_else(|| {
-                OperatorError::Unknown(
+                let msg =
                     "internal invariant violation: CreateAndSyncSecret reached without payload \
-                     (decide_next_action_secret should guarantee key_present=true)"
-                        .to_string(),
-                )
+                           (decide_next_action_secret should guarantee key_present=true)";
+                tracing::error!(
+                    cr = %secret_cr.name_any(),
+                    namespace = %namespace,
+                    "{msg} — operator bug, please report"
+                );
+                OperatorError::Unknown(msg.to_string())
             })?;
 
             // Si create_secret_version échoue après le patch préliminaire "Syncing",
@@ -2019,11 +2026,14 @@ async fn reconcile_scaleway_secret_inner(
             // l'invariant côté parsing ; ce `ok_or_else` reste défensif côté
             // décision (en cas de régression future du decide layer).
             let payload = ks_payload.take().ok_or_else(|| {
-                OperatorError::Unknown(
-                    "internal invariant violation: PushNewVersion reached without payload \
-                     (decide_next_action_secret should guarantee key_present=true)"
-                        .to_string(),
-                )
+                let msg = "internal invariant violation: PushNewVersion reached without payload \
+                           (decide_next_action_secret should guarantee key_present=true)";
+                tracing::error!(
+                    cr = %secret_cr.name_any(),
+                    namespace = %namespace,
+                    "{msg} — operator bug, please report"
+                );
+                OperatorError::Unknown(msg.to_string())
             })?;
 
             let old_revision = current_status.current_version;
