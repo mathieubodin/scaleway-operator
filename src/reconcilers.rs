@@ -1822,7 +1822,26 @@ async fn reconcile_scaleway_secret_inner(
                 measurer.set_outcome(ReconcileOutcome::Error);
             })?;
 
-            // Désactiver l'ancienne version (idempotent si déjà désactivée)
+            // Tracker la nouvelle révision AVANT de tenter le disable de l'ancienne.
+            // Invariant (issue #114) : si le status est mis à jour en premier avec
+            // `last_synced_resource_version = current_resource_version`, alors un
+            // échec ultérieur sur disable ne déclenche pas un re-PushNewVersion au
+            // prochain reconcile (la décision sera AlreadySynced). Sans cet ordre,
+            // chaque échec transitoire sur disable créerait une version active
+            // supplémentaire sur Scaleway → dérive.
+            let mut status = current_status;
+            status.current_version = Some(new_revision);
+            status.last_synced_resource_version = current_resource_version.clone();
+            status.sync_state = "Synced".to_string();
+            status.error_message = None;
+            update_secret_status(&secret_cr, &api, status).await?;
+
+            // Désactiver l'ancienne version en best-effort (idempotent si déjà désactivée).
+            // Trade-off accepté (issue #114) : si le disable échoue durablement, l'ancienne
+            // version reste `enabled` sur Scaleway jusqu'à intervention manuelle ou prochaine
+            // rotation. La nouvelle version est correctement référencée et active.
+            // On préfère cette dérive bornée à la création répétée de nouvelles versions
+            // à chaque reconcile en cas d'échec transitoire du disable.
             if let Some(old_rev) = old_revision {
                 if let Err(e) = call_scaleway(&ctx, || {
                     ns_client.disable_secret_version(&secret_cr.spec.region, &scaleway_id, old_rev)
@@ -1833,19 +1852,10 @@ async fn reconcile_scaleway_secret_inner(
                         name = %secret_cr.name_any(),
                         revision = old_rev,
                         error = %e,
-                        "Failed to disable old secret version — will retry"
+                        "Failed to disable old secret version — best-effort, will not fail reconcile (see issue #114)"
                     );
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                    return Err(e);
                 }
             }
-
-            let mut status = current_status;
-            status.current_version = Some(new_revision);
-            status.last_synced_resource_version = current_resource_version.clone();
-            status.sync_state = "Synced".to_string();
-            status.error_message = None;
-            update_secret_status(&secret_cr, &api, status).await?;
 
             measurer.set_outcome(ReconcileOutcome::Synced);
             Ok(Action::requeue(Duration::from_secs(30)))
@@ -2767,6 +2777,33 @@ mod tests {
             decide_next_action_secret(&input),
             SecretReconcileDecision::AlreadySynced
         ));
+    }
+
+    /// Invariant de l'issue #114 : après un PushNewVersion où `create_secret_version`
+    /// a réussi et `update_secret_status` a écrit `last_synced_resource_version =
+    /// current_resource_version`, même si `disable_secret_version` échoue, le prochain
+    /// reconcile DOIT décider `AlreadySynced` (et non re-PushNewVersion). Ceci garantit
+    /// qu'un échec transitoire sur disable ne provoque pas la création répétée de
+    /// nouvelles versions sur Scaleway.
+    #[test]
+    fn test_push_new_version_disable_failure_does_not_re_push() {
+        // État après un PushNewVersion partiellement réussi :
+        // - create_secret_version a réussi → current_version mis à jour côté Scaleway
+        // - update_secret_status a écrit last_synced_resource_version = "rv-after"
+        // - disable_secret_version a échoué (best-effort, ne change pas le status)
+        // - resourceVersion du Secret K8s source inchangée entre deux reconciles
+        let input = SecretReconcileInput {
+            last_synced_resource_version: Some("rv-after".to_string()),
+            current_resource_version: Some("rv-after".to_string()),
+            ..base_secret_input()
+        };
+        assert!(
+            matches!(
+                decide_next_action_secret(&input),
+                SecretReconcileDecision::AlreadySynced
+            ),
+            "post-push status update must prevent re-create even when disable failed (issue #114)"
+        );
     }
 
     #[test]
