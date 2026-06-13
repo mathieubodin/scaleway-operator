@@ -75,15 +75,33 @@ Chaque namespace hébergeant des `Instance` doit avoir :
 
 ### Prérequis Secret source pour `ScalewaySecret`
 
-Un `ScalewaySecret` ne peut lire un Secret K8s source que si CES DEUX conditions sont remplies sur le Secret :
+Un `ScalewaySecret` ne peut lire un Secret K8s source que si ces deux conditions sont remplies sur le Secret :
 
 - **Label opt-in** : `scaleway.mathieubodin.io/allow-operator-read: "true"` (chaîne exacte, pas de variante)
 - **Annotation d'identité** : `scaleway.mathieubodin.io/allowed-cr: "<cr-namespace>/<cr-name>"` strictement égale au CR qui le réfère
 
-Si l'une des deux est absente ou incorrecte, l'opérateur refuse la lecture et émet l'erreur
-permanente `SecretOptInMissing`. Ce double contrôle ferme la faille « label-bypass via
-`patch secrets` » : un utilisateur avec `patch secrets` (mais sans `get secrets`) ne peut pas
-labelliser un Secret qu'il ne possède pas pour le faire exfiltrer par un CR qu'il contrôle.
+Exemple :
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-password
+  namespace: team-a
+  labels:
+    scaleway.mathieubodin.io/allow-operator-read: "true"
+  annotations:
+    scaleway.mathieubodin.io/allowed-cr: "team-a/db-sync"
+```
+
+Si l'une des deux est absente ou incorrecte, l'opérateur refuse la lecture et émet
+l'erreur permanente `SecretOptInMissing`. Ce double contrôle ferme la faille
+« label-bypass via `patch secrets` » : un utilisateur ayant `patch secrets` (mais pas
+`get secrets`) ne peut pas labelliser un Secret d'autrui pour le faire exfiltrer.
+
+> ℹ️ Limite du modèle : l'annotation est mutable par quiconque a `patch secrets` sur
+> le namespace. La frontière de confiance est donc « qui peut patch le Secret peut l'opter
+> in pour un CR donné ». Les RBAC du namespace restent la responsabilité de l'opérateur cluster.
 
 ### CRDs déployées
 
