@@ -1829,6 +1829,15 @@ async fn reconcile_scaleway_secret_inner(
             // prochain reconcile (la décision sera AlreadySynced). Sans cet ordre,
             // chaque échec transitoire sur disable créerait une version active
             // supplémentaire sur Scaleway → dérive.
+            //
+            // Limite explicite (revue Opus correctness) : la garantie est conditionnée
+            // au succès de `update_secret_status` (le `?` ligne suivante propage l'Err).
+            // Si la mise à jour du status K8s échoue durablement (5xx persistant,
+            // conflit 409, kube-apiserver down) ALORS que `create_secret_version` a
+            // réussi, le reconcile suivant re-décidera `PushNewVersion` et créera une
+            // 2e version active sur Scaleway. Probabilité faible (PATCH idempotent +
+            // retry kube-rs) mais non nulle. La fix #114 réduit donc la fenêtre de
+            // dérive sans l'éliminer totalement.
             let mut status = current_status;
             status.current_version = Some(new_revision);
             status.last_synced_resource_version = current_resource_version.clone();
@@ -2779,19 +2788,22 @@ mod tests {
         ));
     }
 
-    /// Invariant de l'issue #114 : après un PushNewVersion où `create_secret_version`
-    /// a réussi et `update_secret_status` a écrit `last_synced_resource_version =
-    /// current_resource_version`, même si `disable_secret_version` échoue, le prochain
-    /// reconcile DOIT décider `AlreadySynced` (et non re-PushNewVersion). Ceci garantit
-    /// qu'un échec transitoire sur disable ne provoque pas la création répétée de
-    /// nouvelles versions sur Scaleway.
+    /// Documentation d'invariant pour l'issue #114 — couche PURE uniquement.
+    ///
+    /// Sous l'hypothèse que `reconcile_scaleway_secret_inner` appelle bien
+    /// `update_secret_status` AVANT `disable_secret_version` (l'ordre fixé par
+    /// #114), le decide layer garantit que `last_synced_resource_version ==
+    /// current_resource_version` mène à `AlreadySynced` — donc pas de
+    /// re-PushNewVersion même si le disable a échoué.
+    ///
+    /// ⚠️ Ce test NE verrouille PAS l'ordre des side-effects dans la couche
+    /// I/O — il documente seulement l'invariant decide qui rend la fix
+    /// correcte. Un test mockito sur `reconcile_scaleway_secret_inner` avec
+    /// `create_secret_version=200` + `disable_secret_version=500` est nécessaire
+    /// pour vraiment détecter une régression d'ordre. Tracé dans l'issue #118
+    /// (tests d'intégration ScalewaySecret).
     #[test]
-    fn test_push_new_version_disable_failure_does_not_re_push() {
-        // État après un PushNewVersion partiellement réussi :
-        // - create_secret_version a réussi → current_version mis à jour côté Scaleway
-        // - update_secret_status a écrit last_synced_resource_version = "rv-after"
-        // - disable_secret_version a échoué (best-effort, ne change pas le status)
-        // - resourceVersion du Secret K8s source inchangée entre deux reconciles
+    fn test_decide_after_successful_push_with_failed_disable_is_already_synced() {
         let input = SecretReconcileInput {
             last_synced_resource_version: Some("rv-after".to_string()),
             current_resource_version: Some("rv-after".to_string()),
@@ -2802,7 +2814,7 @@ mod tests {
                 decide_next_action_secret(&input),
                 SecretReconcileDecision::AlreadySynced
             ),
-            "post-push status update must prevent re-create even when disable failed (issue #114)"
+            "decide layer must yield AlreadySynced when rvs match (post-push state — issue #114)"
         );
     }
 
