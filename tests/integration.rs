@@ -9,7 +9,10 @@ use kube::api::{DeleteParams, Patch, PatchParams, PostParams};
 use kube::{Api, Client};
 use scaleway_operator::{
     context::Context,
-    resources::{Instance, InstanceSpec, InstanceStatus, LoadBalancer, LoadBalancerSpec},
+    resources::{
+        Instance, InstanceSpec, InstanceStatus, KubernetesSecretRef, LoadBalancer,
+        LoadBalancerSpec, ScalewaySecret, ScalewaySecretSpec, SecretSource,
+    },
     scaleway::ScalewayClient,
 };
 use std::sync::Arc;
@@ -29,6 +32,18 @@ const NS_VIEWER: &str = "scw-test-viewer";
 const NS_EDITOR: &str = "scw-test-editor";
 
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
+const SECRET_FINALIZER: &str = "scaleway.mathieubodin.io/secret-finalizer";
+
+// ── Noms des Secrets K8s pré-créés par k8s/test-fixtures.yaml (issue #118) ──
+/// Secret K8s avec label opt-in + annotation OK + clé "password" présente.
+/// Réservé au test happy path (`test_scalewaysecret_create_with_mock_scaleway_writes_status`,
+/// `unimplemented!()` — voir #118).
+#[allow(dead_code)]
+const KS_SECRET_OPTED_IN: &str = "scw-test-secret-opted-in";
+/// Secret K8s sans label opt-in → SecretOptInMissing permanent.
+const KS_SECRET_NO_OPTIN: &str = "scw-test-secret-no-optin";
+/// Secret K8s opt-in OK mais clé "password" absente → SecretKeyNotFound permanent.
+const KS_SECRET_WRONG_KEY: &str = "scw-test-secret-wrong-key";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -149,6 +164,61 @@ impl TestFixture {
         api.get(name)
             .await
             .unwrap_or_else(|e| panic!("get after patch_status({}) failed: {}", name, e))
+    }
+
+    /// Crée un ScalewaySecret référençant un Secret K8s du namespace fixture (issue #118).
+    ///
+    /// `name`            : nom du CR ScalewaySecret (et du Secret Scaleway côté API).
+    /// `k8s_secret_name` : nom du Secret K8s source dans le même namespace.
+    /// `key`             : clé du Secret K8s à synchroniser.
+    pub async fn create_scaleway_secret(
+        &self,
+        name: &str,
+        k8s_secret_name: &str,
+        key: &str,
+    ) -> ScalewaySecret {
+        let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
+        let obj = ScalewaySecret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(self.ns.to_string()),
+                finalizers: Some(vec![SECRET_FINALIZER.to_string()]),
+                ..Default::default()
+            },
+            spec: ScalewaySecretSpec {
+                name: name.to_string(),
+                region: "fr-par".to_string(),
+                source: SecretSource {
+                    kubernetes_secret: Some(KubernetesSecretRef {
+                        name: k8s_secret_name.to_string(),
+                        key: key.to_string(),
+                    }),
+                },
+                description: None,
+                tags: vec![],
+            },
+            status: None,
+        };
+        api.create(&PostParams::default(), &obj)
+            .await
+            .unwrap_or_else(|e| panic!("create_scaleway_secret({}) failed: {}", name, e));
+        api.get(name)
+            .await
+            .unwrap_or_else(|e| panic!("get after create({}) failed: {}", name, e))
+    }
+
+    /// Supprime un ScalewaySecret (retire d'abord le finalizer pour ne pas bloquer la GC).
+    pub async fn cleanup_scaleway_secret(&self, name: &str) {
+        let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
+        let remove_finalizer = serde_json::json!({ "metadata": { "finalizers": null } });
+        let _ = api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(remove_finalizer),
+            )
+            .await;
+        let _ = api.delete(name, &DeleteParams::default()).await;
     }
 
     /// Supprime une Instance (retire d'abord le finalizer pour ne pas bloquer la GC).
@@ -624,4 +694,104 @@ async fn test_loadbalancer_adds_finalizer_on_first_reconcile() {
             .contains(&"scaleway.mathieubodin.io/loadbalancer-finalizer".to_string()),
         "Finalizer should be present after first reconcile"
     );
+}
+
+// ── ScalewaySecret integration tests (issue #118 — scaffolding) ───────────────
+//
+// Ces tests sont des squelettes pour démontrer la forme attendue ; ils sont
+// `#[ignore]` car ils nécessitent un cluster avec les fixtures de la section
+// "Fixtures ScalewaySecret" de k8s/test-fixtures.yaml ET un serveur mock
+// Scaleway pour le cas de création. La logique métier (opt-in, clé manquante,
+// création + revision) est déjà couverte par les tests unitaires de
+// reconcilers.rs ; ces tests fermeraient les bornes du contrat
+// `last_synced_resource_version == ks.metadata.resource_version` (SEC-002)
+// et de la cascade Create + create_secret_version.
+//
+// Implémentation complète à faire dans une PR de suivi — l'effort serait
+// déraisonnable pour cette PR (setup mockito multi-endpoints + cycle status
+// Scaleway). Le scaffolding ici sert de point d'entrée concret.
+
+#[tokio::test]
+#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API"]
+async fn test_scalewaysecret_opt_in_missing_returns_permanent_error() {
+    // Cas : CR ScalewaySecret pointe vers un Secret K8s sans label opt-in.
+    // Attendu : Err(SecretOptInMissing) — permanent (await_change, pas de retry).
+    let server = mockito::Server::new_async().await;
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-no-optin");
+    let _cr = fixture
+        .create_scaleway_secret(&name, KS_SECRET_NO_OPTIN, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+    let fetched = api.get(&name).await.expect("re-fetch ScalewaySecret");
+    let result =
+        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(fetched), ctx).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    drop(server);
+
+    let err = result.expect_err("expected SecretOptInMissing");
+    assert!(
+        err.to_string().contains("opt-in"),
+        "expected opt-in error, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API"]
+async fn test_scalewaysecret_key_missing_returns_permanent_error() {
+    // Cas : CR ScalewaySecret pointe vers un Secret K8s opt-in OK mais clé
+    // référencée absente de .data. Attendu : Err(SecretKeyNotFound) — permanent.
+    let server = mockito::Server::new_async().await;
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = "scw-secret-cr-2".to_string(); // annotation allowed-cr cible ce nom
+    let _cr = fixture
+        .create_scaleway_secret(&name, KS_SECRET_WRONG_KEY, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+    let fetched = api.get(&name).await.expect("re-fetch ScalewaySecret");
+    let result =
+        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(fetched), ctx).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    drop(server);
+
+    let err = result.expect_err("expected SecretKeyNotFound");
+    assert!(
+        err.to_string().to_lowercase().contains("key"),
+        "expected key-not-found error, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API (POST /secrets + POST /versions)"]
+async fn test_scalewaysecret_create_with_mock_scaleway_writes_status() {
+    // Happy path : K8s Secret opt-in OK + clé présente, Scaleway mock répond
+    // 201 sur POST /secrets et POST .../versions.
+    // Attendu : status.scaleway_id = "sec-mock-id"
+    //           status.last_synced_resource_version = rv du Secret K8s
+    //           sync_state = "Synced"
+    //
+    // Verrouille le contrat SEC-002 : `last_synced_resource_version` provient
+    // de `ks.metadata.resource_version` (et non pas d'un hash de la valeur).
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock(
+            "GET",
+            "/account/v3/projects/11111111-1111-1111-1111-111111111111",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"id": "11111111-1111-1111-1111-111111111111"}"#)
+        .create_async()
+        .await;
+    // TODO(#118) : compléter les mocks find_by_tags + create_secret + create_secret_version
+    // et asserter status.last_synced_resource_version == rv du Secret K8s lu.
+    unimplemented!("see #118 — needs full Scaleway secret API mock surface");
 }

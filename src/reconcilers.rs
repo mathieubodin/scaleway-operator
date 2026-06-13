@@ -1331,12 +1331,26 @@ const STATUS_REVOKED_GENERIC: &str =
 
 /// État lu en UNE seule fois depuis le Secret K8s source.
 /// Évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
+///
+/// Type énuméré : le compilateur force l'invariant
+/// `payload presence ⟺ key_present`. Le variant `Missing` n'existe pas car
+/// la branche "Secret K8s absent" est traitée en amont par `read_k8s_secret_source`
+/// qui retourne `Err(SecretNotFound)` via `map_kube_get_error`. Quand on a un
+/// `KsSourceState`, le Secret K8s existe forcément.
+///
+/// Avant le refactor (issue #118) : `struct { resource_version: Option<String>,
+/// key_present: bool, payload: Option<Vec<u8>> }` reposait sur la discipline du
+/// code (deux `expect()` dans les branches CreateAndSync / PushNewVersion).
 #[derive(Debug)]
-struct KsSourceState {
-    resource_version: Option<String>,
-    key_present: bool,
-    /// Charge utile décodée à partir de `.data[key]` quand `key_present` est true.
-    payload: Option<Vec<u8>>,
+enum KsSourceState {
+    /// Secret K8s lu avec succès, mais la clé demandée est absente de `.data`.
+    /// → `decide_next_action_secret` retourne `ErrorKsKeyNotFound` (permanent).
+    KeyAbsent { resource_version: String },
+    /// Secret K8s lu avec succès, clé présente, payload extrait.
+    Present {
+        resource_version: String,
+        payload: Vec<u8>,
+    },
 }
 
 /// Vérifie le label d'opt-in `scaleway.mathieubodin.io/allow-operator-read: "true"`.
@@ -1414,18 +1428,23 @@ fn parse_k8s_secret_source(
         )));
     }
 
-    let resource_version = ks.metadata.resource_version.clone();
+    // Tout objet retourné par un GET kube-apiserver porte un resourceVersion ;
+    // un Secret sans resourceVersion ne peut pas exister côté serveur. On garde
+    // une valeur par défaut vide pour la robustesse — un rv vide forcera
+    // simplement un PushNewVersion au prochain reconcile (différent d'aujourd'hui).
+    let resource_version = ks.metadata.resource_version.clone().unwrap_or_default();
     let payload = ks
         .data
         .as_ref()
         .and_then(|d| d.get(key))
         .map(|b| b.0.clone());
-    let key_present = payload.is_some();
 
-    Ok(KsSourceState {
-        resource_version,
-        key_present,
-        payload,
+    Ok(match payload {
+        Some(payload) => KsSourceState::Present {
+            resource_version,
+            payload,
+        },
+        None => KsSourceState::KeyAbsent { resource_version },
     })
 }
 
@@ -1709,7 +1728,16 @@ async fn reconcile_scaleway_secret_inner(
             let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
             let cr_name = secret_cr.name_any();
             match read_k8s_secret_source(&ctx, &namespace, ks_ref, &namespace, &cr_name).await {
-                Ok(state) => (state.resource_version, state.key_present, state.payload),
+                // Le type enum (issue #118) garantit ici l'invariant
+                // `payload presence ⟺ key_present` au niveau du compilateur :
+                // plus de risque de désync entre les trois variables locales.
+                Ok(KsSourceState::KeyAbsent { resource_version }) => {
+                    (Some(resource_version), false, None)
+                }
+                Ok(KsSourceState::Present {
+                    resource_version,
+                    payload,
+                }) => (Some(resource_version), true, Some(payload)),
                 Err(OperatorError::SecretNotFound(_)) => {
                     // Cas "Secret K8s absent" — traité par le decide layer via ErrorKsSecretNotFound.
                     (None, false, None)
@@ -1921,9 +1949,20 @@ async fn reconcile_scaleway_secret_inner(
 
             // Payload et resource_version proviennent de la lecture UNIQUE en amont —
             // évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
-            let payload = ks_payload.take().expect(
-                "decide_next_action_secret guarantees key_present and current_resource_version",
-            );
+            //
+            // L'invariant `payload presence ⟺ key_present` est forcé par
+            // l'enum `KsSourceState` (issue #118). `decide_next_action_secret`
+            // garantit qu'on n'atteint cette branche que si `key_present=true`,
+            // donc `ks_payload` est forcément `Some`. La branche `None` ne peut
+            // pas être atteinte ; on évite cependant `expect()` (panic) en
+            // retournant une erreur tracée.
+            let payload = ks_payload.take().ok_or_else(|| {
+                OperatorError::Unknown(
+                    "internal invariant violation: CreateAndSyncSecret reached without payload \
+                     (decide_next_action_secret should guarantee key_present=true)"
+                        .to_string(),
+                )
+            })?;
 
             // Si create_secret_version échoue après le patch préliminaire "Syncing",
             // il faut transitionner le status vers "Error" sinon le CR reste en
@@ -1975,9 +2014,17 @@ async fn reconcile_scaleway_secret_inner(
             };
 
             // Payload et resource_version proviennent de la lecture UNIQUE en amont.
-            let payload = ks_payload.take().expect(
-                "decide_next_action_secret guarantees key_present and current_resource_version",
-            );
+            // Cf. branche CreateAndSyncSecret ci-dessus pour le détail de
+            // l'invariant. Le type `KsSourceState` (issue #118) garantit
+            // l'invariant côté parsing ; ce `ok_or_else` reste défensif côté
+            // décision (en cas de régression future du decide layer).
+            let payload = ks_payload.take().ok_or_else(|| {
+                OperatorError::Unknown(
+                    "internal invariant violation: PushNewVersion reached without payload \
+                     (decide_next_action_secret should guarantee key_present=true)"
+                        .to_string(),
+                )
+            })?;
 
             let old_revision = current_status.current_version;
 
@@ -3253,9 +3300,16 @@ mod tests {
         let state =
             parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
-        assert_eq!(state.resource_version.as_deref(), Some("12345"));
-        assert!(state.key_present);
-        assert_eq!(state.payload.as_deref(), Some(b"s3cret".as_ref()));
+        match state {
+            KsSourceState::Present {
+                resource_version,
+                payload,
+            } => {
+                assert_eq!(resource_version, "12345");
+                assert_eq!(payload, b"s3cret".to_vec());
+            }
+            other => panic!("expected KsSourceState::Present, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3278,9 +3332,12 @@ mod tests {
         let state =
             parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
-        assert_eq!(state.resource_version.as_deref(), Some("12345"));
-        assert!(!state.key_present, "key 'password' is not in .data");
-        assert!(state.payload.is_none());
+        match state {
+            KsSourceState::KeyAbsent { resource_version } => {
+                assert_eq!(resource_version, "12345");
+            }
+            other => panic!("expected KsSourceState::KeyAbsent, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3297,8 +3354,10 @@ mod tests {
         let state =
             parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
-        assert!(!state.key_present);
-        assert!(state.payload.is_none());
+        assert!(
+            matches!(state, KsSourceState::KeyAbsent { ref resource_version } if resource_version == "12345"),
+            "expected KsSourceState::KeyAbsent with rv=12345, got {state:?}"
+        );
     }
 
     // ── build_anonymized_source_error_status (SEC-SECRET-NAME-DISCLOSURE) ────
@@ -3631,8 +3690,12 @@ mod tests {
         let state =
             parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
 
-        assert!(state.key_present);
-        assert_eq!(state.payload.as_deref(), Some(b"s3cret".as_ref()));
+        match state {
+            KsSourceState::Present { payload, .. } => {
+                assert_eq!(payload, b"s3cret".to_vec());
+            }
+            other => panic!("expected KsSourceState::Present, got {other:?}"),
+        }
     }
 
     #[test]
