@@ -1540,7 +1540,17 @@ async fn handle_opt_in_revocation(
     }
 
     let status = build_revoked_status(current_status);
-    let _ = update_secret_status(secret_cr, api, status).await;
+    if let Err(e) = update_secret_status(secret_cr, api, status).await {
+        // La désactivation Scaleway a été tentée mais le patch status K8s a échoué.
+        // L'admin a besoin de pouvoir corréler "version Scaleway désactivée" vs "status
+        // K8s pas en Revoked". Le prochain reconcile retentera la séquence
+        // (disable est idempotent côté Scaleway, cf. test_disable_secret_version_already_disabled_is_ok).
+        tracing::warn!(
+            scaleway_id = %scaleway_id,
+            error = %e,
+            "Failed to patch Revoked status — Scaleway disable already applied, will retry on next reconcile"
+        );
+    }
 }
 
 /// Met à jour le status avec un message générique (anonymise les noms de Secret/clé)
