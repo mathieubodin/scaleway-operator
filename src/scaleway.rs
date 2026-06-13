@@ -1,5 +1,6 @@
 use crate::error::{OperatorError, Result};
 use crate::resources::{InstanceSpec, LoadBalancerSpec};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client as ReqwestClient;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -489,6 +490,222 @@ impl ScalewayClient {
         }
     }
 
+    // ============== ScalewaySecret / Secret Manager Operations ==============
+
+    fn secret_operator_tags(namespace: &str, cr_name: &str) -> Vec<String> {
+        vec![
+            "managed-by=scaleway-operator".to_string(),
+            format!("scaleway-operator-cr-namespace={}", namespace),
+            format!("scaleway-operator-cr-name={}", cr_name),
+        ]
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_scaleway_secret(
+        &self,
+        region: &str,
+        name: &str,
+        project_id: &str,
+        description: Option<&str>,
+        extra_tags: &[String],
+        namespace: &str,
+        cr_name: &str,
+    ) -> Result<String> {
+        let mut tags = Self::secret_operator_tags(namespace, cr_name);
+        tags.extend(extra_tags.iter().cloned());
+
+        let body = json!({
+            "name": name,
+            "project_id": project_id,
+            "description": description.unwrap_or(""),
+            "tags": tags,
+        });
+
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets",
+            self.base_url, region
+        );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Auth-Token", &self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["id"]
+            .as_str()
+            .ok_or_else(|| OperatorError::Unknown("No secret ID in response".to_string()))?
+            .to_string())
+    }
+
+    /// Searches for a Scaleway secret by operator tags. Returns the ID of the first
+    /// match, or None if no secret with those tags exists in the project.
+    pub async fn find_scaleway_secret_by_tags(
+        &self,
+        region: &str,
+        project_id: &str,
+        namespace: &str,
+        cr_name: &str,
+    ) -> Result<Option<String>> {
+        let tags = Self::secret_operator_tags(namespace, cr_name);
+
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets",
+            self.base_url, region
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .query(&[("project_id", project_id)])
+            .query(
+                &tags
+                    .iter()
+                    .map(|t| ("tags", t.as_str()))
+                    .collect::<Vec<_>>(),
+            )
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => {}
+            reqwest::StatusCode::NOT_FOUND => return Ok(None),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                return Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                });
+            }
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["secrets"]
+            .as_array()
+            .and_then(|secrets| secrets.first())
+            .and_then(|s| s["id"].as_str())
+            .map(|id| id.to_string()))
+    }
+
+    /// Creates a new version for `secret_id`. The payload is base64-encoded
+    /// before being sent. Returns the revision number of the new version.
+    pub async fn create_secret_version(
+        &self,
+        region: &str,
+        secret_id: &str,
+        payload: &[u8],
+    ) -> Result<u32> {
+        let body = json!({
+            "data": BASE64.encode(payload),
+        });
+
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets/{}/versions",
+            self.base_url, region, secret_id
+        );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Auth-Token", &self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        data["revision"].as_u64().map(|r| r as u32).ok_or_else(|| {
+            OperatorError::Unknown("No revision in create_version response".to_string())
+        })
+    }
+
+    /// Disables a specific version of a Scaleway secret. Idempotent — if the
+    /// version is already disabled the call succeeds.
+    pub async fn disable_secret_version(
+        &self,
+        region: &str,
+        secret_id: &str,
+        revision: u32,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets/{}/versions/{}/disable",
+            self.base_url, region, secret_id, revision
+        );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Auth-Token", &self.token)
+            .header("Content-Length", "0")
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            // 409 Conflict = already disabled — treat as success
+            reqwest::StatusCode::CONFLICT => Ok(()),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                })
+            }
+        }
+    }
+
+    /// Deletes a Scaleway secret and all its versions. Idempotent — 404 is
+    /// treated as success (secret already gone).
+    pub async fn delete_scaleway_secret(&self, region: &str, secret_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets/{}",
+            self.base_url, region, secret_id
+        );
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            reqwest::StatusCode::NOT_FOUND => Ok(()),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                })
+            }
+        }
+    }
+
     // ============== Validation ==============
 
     pub async fn validate_zone(&self, zone: &str) -> Result<()> {
@@ -876,45 +1093,51 @@ mod tests {
     #[tokio::test]
     async fn test_delete_instance_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("DELETE", "/instance/v1/zones/fr-par-1/servers/srv-del")
             .with_status(204)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.delete_instance("fr-par-1", "srv-del").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_delete_instance_404_is_success() {
         // Idempotence : instance déjà supprimée → Ok(())
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("DELETE", "/instance/v1/zones/fr-par-1/servers/srv-gone")
             .with_status(404)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.delete_instance("fr-par-1", "srv-gone").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_verify_project_access_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock("GET", "/account/v3/projects/proj-abc")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"id": "proj-abc"}"#)
+            .expect(1)
             .create_async()
             .await;
 
         let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
         assert!(client.verify_project_access("proj-abc").await.is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1146,13 +1369,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_load_balancer_success() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock(
                 "DELETE",
                 mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-del".to_string()),
             )
             .with_status(204)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
@@ -1161,18 +1385,20 @@ mod tests {
             .delete_load_balancer("fr-par-1", "lb-del", true)
             .await
             .is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_delete_load_balancer_404_is_idempotent() {
         let mut server = mockito::Server::new_async().await;
-        server
+        let mock = server
             .mock(
                 "DELETE",
                 mockito::Matcher::Regex(r"/lb/v1/zones/fr-par-1/lbs/lb-gone".to_string()),
             )
             .with_status(404)
             .with_body("")
+            .expect(1)
             .create_async()
             .await;
 
@@ -1181,6 +1407,7 @@ mod tests {
             .delete_load_balancer("fr-par-1", "lb-gone", true)
             .await
             .is_ok());
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1219,6 +1446,306 @@ mod tests {
     async fn test_validate_lb_type_invalid() {
         let result = test_client().validate_lb_type("MEGA-LB");
         assert!(matches!(result, Err(OperatorError::InvalidLbType(_))));
+    }
+
+    // --- ScalewaySecret / Secret Manager ---
+
+    #[tokio::test]
+    async fn test_create_scaleway_secret_success() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/secret-manager/v1beta1/regions/fr-par/secrets")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "sec-abc123", "name": "my-secret"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_scaleway_secret("fr-par", "my-secret", "proj-x", None, &[], "ns", "cr")
+            .await;
+
+        assert!(result.is_ok(), "{:?}", result);
+        assert_eq!(result.unwrap(), "sec-abc123");
+    }
+
+    #[tokio::test]
+    async fn test_create_scaleway_secret_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/secret-manager/v1beta1/regions/fr-par/secrets")
+            .with_status(403)
+            .with_body(r#"{"message": "forbidden"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_scaleway_secret("fr-par", "my-secret", "proj-x", None, &[], "ns", "cr")
+            .await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_find_scaleway_secret_by_tags_found() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/secret-manager/v1beta1/regions/fr-par/secrets".to_string(),
+                ),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"secrets": [{"id": "sec-found"}]}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        assert_eq!(result.unwrap(), Some("sec-found".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_find_scaleway_secret_by_tags_empty() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/secret-manager/v1beta1/regions/fr-par/secrets".to_string(),
+                ),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"secrets": []}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_find_scaleway_secret_by_tags_403_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/secret-manager/v1beta1/regions/fr-par/secrets".to_string(),
+                ),
+            )
+            .with_status(403)
+            .with_body(r#"{"message": "forbidden"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        let Err(OperatorError::ScalewayError { status, message }) = result else {
+            panic!("expected ScalewayError, got {result:?}");
+        };
+        assert!(
+            status.contains("403"),
+            "status should contain '403' for differentiation, got {status}"
+        );
+        assert!(
+            message.contains("forbidden"),
+            "message should preserve body for diagnostics, got {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_scaleway_secret_by_tags_429_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/secret-manager/v1beta1/regions/fr-par/secrets".to_string(),
+                ),
+            )
+            .with_status(429)
+            .with_body(r#"{"message": "too many requests"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .find_scaleway_secret_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        let Err(OperatorError::ScalewayError { status, message }) = result else {
+            panic!("expected ScalewayError, got {result:?}");
+        };
+        assert!(
+            status.contains("429"),
+            "status should contain '429' for rate-limit handling, got {status}"
+        );
+        assert!(
+            message.contains("too many requests"),
+            "message should preserve body, got {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_version_success() {
+        let mut server = mockito::Server::new_async().await;
+        // Vérifie que le payload est base64-encodé dans le body :
+        // base64("my-payload") = "bXktcGF5bG9hZA=="
+        server
+            .mock(
+                "POST",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc/versions",
+            )
+            .match_body(mockito::Matcher::PartialJsonString(
+                r#"{"data": "bXktcGF5bG9hZA=="}"#.to_string(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"revision": 3, "status": "enabled"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_secret_version("fr-par", "sec-abc", b"my-payload")
+            .await;
+
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_disable_secret_version_success() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "POST",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc/versions/2/disable",
+            )
+            .with_status(200)
+            .with_body(r#"{"revision": 2, "status": "disabled"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .disable_secret_version("fr-par", "sec-abc", 2)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_disable_secret_version_already_disabled_is_ok() {
+        // 409 Conflict = déjà désactivé → idempotent
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "POST",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc/versions/1/disable",
+            )
+            .with_status(409)
+            .with_body(r#"{"message": "version already disabled"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .disable_secret_version("fr-par", "sec-abc", 1)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_scaleway_secret_success() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-del",
+            )
+            .with_status(204)
+            .with_body("")
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .delete_scaleway_secret("fr-par", "sec-del")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_disable_secret_version_500_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "POST",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc/versions/2/disable",
+            )
+            .with_status(500)
+            .with_body(r#"{"message": "internal error"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client.disable_secret_version("fr-par", "sec-abc", 2).await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_delete_scaleway_secret_500_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc",
+            )
+            .with_status(500)
+            .with_body(r#"{"message": "internal error"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client.delete_scaleway_secret("fr-par", "sec-abc").await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_delete_scaleway_secret_404_is_idempotent() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "DELETE",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-gone",
+            )
+            .with_status(404)
+            .with_body("")
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        assert!(client
+            .delete_scaleway_secret("fr-par", "sec-gone")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

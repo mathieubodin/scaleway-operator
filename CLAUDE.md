@@ -42,6 +42,7 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
 
 - **`reconcilers.rs`** — `reconcile_instance` : logique de réconciliation en 9 étapes (rôle namespace → project_id → finalizer → validation → create/sync). `error_policy` requeue après 60s en cas d'erreur.
     La décision est séparée dans `decide_next_action(&input) -> ReconcileDecision` (couche pure, testable unitairement) ; les effets de bord sont dans `reconcile_instance_inner`.
+    Le module héberge aussi `reconcile_load_balancer` et `reconcile_scaleway_secret`, qui suivent la même architecture (couche `decide_*_next_action` pure + fonction `*_inner` portant les I/O), avec leurs flux propres détaillés ci-dessous.
 - **`scaleway.rs`** — `ScalewayClient` wrappant `reqwest`. Appels REST à `https://api.scaleway.com`. Authentification via header `X-Auth-Token`.
 - **`error.rs`** — `OperatorError` enum avec `thiserror`, couvrant les erreurs kube, Scaleway, réseau et configuration. Expose `metric_label()` pour produire le label Prometheus PascalCase de chaque variant.
 - **`metrics.rs`** — `ReconcileOutcome` enum et `OperatorMetrics` struct (compteur `scaleway_operator_reconcile_errors_total` + histogramme `scaleway_operator_reconcile_duration_seconds`). `ReconcileMeasurer` RAII dans `reconcilers.rs` consomme ces handles.
@@ -59,6 +60,29 @@ Opérateur Kubernetes écrit en Rust avec [kube-rs](https://kube.rs/). Il récon
 8. Synchronise l'état depuis Scaleway et met à jour le `status`.
 9. Requeue toutes les 30 secondes pour la synchronisation périodique.
 
+### Flux de réconciliation (LoadBalancer)
+
+Pattern miroir à `Instance`, adapté aux LB Scaleway :
+
+1. Récupère le `NamespaceRole` cluster-wide associé au namespace (erreur bloquante si absent).
+2. Lit l'annotation `scaleway.mathieubodin.io/project-id` sur le namespace (erreur bloquante si absente).
+3. Gère le `deletion_timestamp` (DELETE LB Scaleway + retrait du finalizer) ou ajoute le finalizer `scaleway.mathieubodin.io/loadbalancer-finalizer` si absent.
+4. Valide la zone et le type de LB (`LB-S`, `LB-GP-*`) via listes statiques dans `scaleway.rs`.
+5. Vérifie l'accès au projet, puis crée le LB si `status.scaleway_id` est absent.
+6. Synchronise le statut depuis Scaleway et fait converger l'état vers `ready` (un LB transite par `pending` avant d'être exploitable).
+7. Requeue périodiquement pour suivre la convergence et capter les dérives d'état.
+
+### Flux de réconciliation (ScalewaySecret)
+
+Pattern différent — pas de notion de zone, source Kubernetes au lieu d'un spec immuable :
+
+1. Récupère le `NamespaceRole` cluster-wide associé au namespace (erreur bloquante si absent).
+2. Gère le `deletion_timestamp` (suppression best-effort côté Scaleway Secret Manager sur révocation) ou ajoute le finalizer `scaleway.mathieubodin.io/scalewaysecret-finalizer` si absent.
+3. Lit le Secret K8s source en respectant le double contrôle opt-in label + annotation `allowed-cr` (cf. « Prérequis Secret source pour `ScalewaySecret` ») ; refus permanent `SecretOptInMissing` sinon.
+4. Adopte le secret Scaleway existant (lookup par nom) ou le crée si absent, puis met à jour `status.scaleway_id`.
+5. Pousse une nouvelle version du secret côté Scaleway et persiste le `metadata.resourceVersion` du Secret K8s source dans le `status` — c'est le marqueur qui sert à détecter la prochaine rotation (trade-off documenté dans [`docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md`](docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md)).
+6. Requeue périodiquement : sur le prochain tick, si le `resourceVersion` observé diffère du `resourceVersion` trackê, une nouvelle version est poussée.
+
 ### Variables d'environnement requises
 
 | Variable          | Obligatoire | Description                                                              |
@@ -73,15 +97,51 @@ Chaque namespace hébergeant des `Instance` doit avoir :
 - L'annotation `scaleway.mathieubodin.io/project-id` sur le namespace
 - Une ressource `NamespaceRole` cluster-wide dont le `.metadata.name` correspond exactement au nom du namespace
 
+### Prérequis Secret source pour `ScalewaySecret`
+
+Un `ScalewaySecret` ne peut lire un Secret K8s source que si ces deux conditions sont remplies sur le Secret :
+
+- **Label opt-in** : `scaleway.mathieubodin.io/allow-operator-read: "true"` (chaîne exacte, pas de variante)
+- **Annotation d'identité** : `scaleway.mathieubodin.io/allowed-cr: "<cr-namespace>/<cr-name>"` strictement égale au CR qui le réfère
+
+Exemple :
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-password
+  namespace: team-a
+  labels:
+    scaleway.mathieubodin.io/allow-operator-read: "true"
+  annotations:
+    scaleway.mathieubodin.io/allowed-cr: "team-a/db-sync"
+```
+
+Si l'une des deux est absente ou incorrecte, l'opérateur refuse la lecture et émet
+l'erreur permanente `SecretOptInMissing`. Ce double contrôle ferme la faille
+« label-bypass via `patch secrets` » : un utilisateur ayant `patch secrets` (mais pas
+`get secrets`) ne peut pas labelliser un Secret d'autrui pour le faire exfiltrer.
+
+> ℹ️ Limite du modèle : l'annotation est mutable par quiconque a `patch secrets` sur
+> le namespace. La frontière de confiance est donc « qui peut patch le Secret peut l'opter
+> in pour un CR donné ». Les RBAC du namespace restent la responsabilité de l'opérateur cluster.
+
 ### CRDs déployées
 
 - `instances.scaleway.mathieubodin.io` (namespaced)
 - `projects.scaleway.mathieubodin.io` (namespaced)
+- `loadbalancers.scaleway.mathieubodin.io` (namespaced)
+- `scalewaysecrets.scaleway.mathieubodin.io` (namespaced)
 - `namespaceroles.scaleway.mathieubodin.io` (cluster-wide)
 
 ### Documentation
 
 `docs/solutions/` — solutions documentées à des problèmes passés (patterns architecturaux, bugs, conventions), organisées par catégorie avec frontmatter YAML (`module`, `tags`, `problem_type`). Utile lors de l'implémentation ou du débogage dans des zones déjà documentées.
+
+Décision spécifique à connaître :
+[`docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md`](docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md)
+explique pourquoi `resourceVersion` est utilisé pour la détection de rotation (et pas un HMAC).
 
 ## GitHub Project v2
 

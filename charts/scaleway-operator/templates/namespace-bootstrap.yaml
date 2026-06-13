@@ -23,5 +23,35 @@ metadata:
   name: {{ .name }}
   annotations:
     scaleway.mathieubodin.io/project-id: {{ required (printf "namespaceBootstrap.namespaces[].projectId is required for namespace '%s'" .name) .projectId | quote }}
+---
+# Role permettant à l'opérateur de lire les Secrets opt-in dans le namespace {{ .name }}.
+# Scoped à get uniquement — list/watch non requis par le réconciliateur.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "scaleway-operator.fullname" $ }}-secrets
+  namespace: {{ .name }}
+  labels:
+    {{- include "scaleway-operator.labels" $ | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "scaleway-operator.fullname" $ }}-secrets
+  namespace: {{ .name }}
+  labels:
+    {{- include "scaleway-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "scaleway-operator.fullname" $ }}-secrets
+subjects:
+- kind: ServiceAccount
+  name: {{ include "scaleway-operator.serviceAccountName" $ }}
+  namespace: {{ $.Release.Namespace }}
 {{- end }}
 {{- end }}

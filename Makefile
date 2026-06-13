@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind
+.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -158,6 +158,23 @@ coverage-kind-text: check-llvm-cov check-kind check-docker check-helm ## Coverag
 	@echo "[4/4] Synthèse de coverage..."
 	@echo ""
 	@cargo llvm-cov report
+
+coverage-lcov: check-llvm-cov ## Teste l'application et produit un rapport lcov (pour Codecov CI)
+	cargo llvm-cov clean --workspace 2>/dev/null || true
+	mkdir -p $(COVERAGE_DIR)
+	cargo llvm-cov --lib --tests --lcov --output-path $(COVERAGE_DIR)/lcov.info
+
+coverage-kind-lcov: check-llvm-cov check-kind check-docker check-helm ## Coverage complète (unitaires + intégration kind) — rapport lcov (pour Codecov CI)
+	@echo "[1/4] Nettoyage des données de coverage..."
+	@cargo llvm-cov clean > /dev/null 2>&1 || true
+	@echo "[2/4] Tests unitaires..."
+	@bash -c 'set -o pipefail; cargo llvm-cov --no-report --lib --tests 2>&1 | $(CARGO_COV_FILTER)'
+	@echo "[3/4] Tests d'intégration (cluster kind éphémère)..."
+	@bash scripts/test-integration-kind.sh --coverage
+	@echo "[4/4] Génération du rapport lcov..."
+	@mkdir -p $(COVERAGE_DIR)
+	@cargo llvm-cov report --lcov --output-path $(COVERAGE_DIR)/lcov.info
+	@echo "Report: $(COVERAGE_DIR)/lcov.info"
 
 check: check-cargo check-helm check-markdownlint ## Lint et format
 	cargo fmt

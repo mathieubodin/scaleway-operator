@@ -152,3 +152,56 @@ metadata:
   namespace: scaleway-system
 stringData:
   secret_key: "mock-secret-key"
+
+---
+# ── Fixtures ScalewaySecret (issue #118 — scaffolding tests intégration) ─────
+# Trois Secrets K8s pour démontrer les cas d'opt-in / mauvaise clé / OK.
+# Note : ces fixtures sont créées proactivement dans scw-test-editor pour
+# permettre l'extension future des tests ScalewaySecret. Les tests #[ignore]
+# ajoutés dans tests/integration.rs s'appuient sur ces noms.
+
+---
+# Opt-in OK + annotation allowed-cr OK + clé "password" présente
+# → CreateAndSyncSecret en réussite (cas happy path)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scw-test-secret-opted-in
+  namespace: scw-test-editor
+  labels:
+    scaleway.mathieubodin.io/allow-operator-read: "true"
+    app.kubernetes.io/managed-by: scaleway-operator-test
+  annotations:
+    scaleway.mathieubodin.io/allowed-cr: "scw-test-editor/scw-secret-cr-1"
+data:
+  # base64("s3cr3t") = "czNjcjN0"
+  password: "czNjcjN0"
+
+---
+# Pas d'opt-in label → SecretOptInMissing (erreur permanente)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scw-test-secret-no-optin
+  namespace: scw-test-editor
+  labels:
+    app.kubernetes.io/managed-by: scaleway-operator-test
+data:
+  password: "czNjcjN0"
+
+---
+# Opt-in OK + annotation OK mais clé "password" absente (clé "other" présente)
+# → SecretKeyNotFound (erreur permanente)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scw-test-secret-wrong-key
+  namespace: scw-test-editor
+  labels:
+    scaleway.mathieubodin.io/allow-operator-read: "true"
+    app.kubernetes.io/managed-by: scaleway-operator-test
+  annotations:
+    scaleway.mathieubodin.io/allowed-cr: "scw-test-editor/scw-secret-cr-2"
+data:
+  # Clé différente de celle référencée par le CR (qui demande "password")
+  other: "eA=="

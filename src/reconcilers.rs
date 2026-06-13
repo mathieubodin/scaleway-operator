@@ -2,7 +2,10 @@ use crate::context::Context;
 use crate::context::{extract_project_id_from_namespace, get_scaleway_role_for_namespace};
 use crate::error::{OperatorError, Result};
 use crate::metrics::{OperatorMetrics, ReconcileOutcome};
-use crate::resources::{Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus};
+use crate::resources::{
+    Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus, ScalewaySecret,
+    ScalewaySecretStatus,
+};
 use crate::scaleway::ScalewayClient;
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Secret;
@@ -15,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const LB_FINALIZER: &str = "scaleway.mathieubodin.io/loadbalancer-finalizer";
+const SECRET_FINALIZER: &str = "scaleway.mathieubodin.io/secret-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 // ── ReconcileMeasurer — RAII timer that records duration + outcome ────────────
@@ -76,6 +80,7 @@ struct ReconcileInput {
 }
 
 /// Décision pure dérivée d'un `ReconcileInput`, sans effet de bord.
+#[derive(Debug)]
 enum ReconcileDecision {
     /// Le circuit breaker est ouvert — ignorer cette réconciliation.
     SkipCircuitOpen,
@@ -161,6 +166,7 @@ struct LbReconcileInput {
     status_project_id: Option<String>,
 }
 
+#[derive(Debug)]
 enum LbReconcileDecision {
     SkipCircuitOpen,
     AddLbFinalizer,
@@ -713,7 +719,7 @@ where
     let result = f().await;
     match &result {
         Ok(_) => ctx.record_scaleway_success(),
-        Err(e) if !is_permanent_error(e) => ctx.record_scaleway_failure(),
+        Err(e) if !e.is_permanent_error() => ctx.record_scaleway_failure(),
         _ => {}
     }
     result
@@ -1311,24 +1317,899 @@ async fn validate_lb_spec(
     Ok(())
 }
 
-/// Retourne true si l'erreur est permanente (spec/config incorrecte, ne pas requeue).
-/// Fonction extraite pour être testable sans dépendance sur Arc<Instance> ou Arc<Context>.
-fn is_permanent_error(error: &OperatorError) -> bool {
-    matches!(
-        error,
-        OperatorError::InvalidZone(_)
-            | OperatorError::InvalidInstanceType(_)
-            | OperatorError::InvalidLbType(_)
-            | OperatorError::ConfigError(_)
-            | OperatorError::ProjectAccessDenied(_)
+// ── ScalewaySecret reconciler ────────────────────────────────────────────────
+
+const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
+const ALLOWED_CR_ANNOTATION: &str = "scaleway.mathieubodin.io/allowed-cr";
+const STATUS_ERROR_GENERIC: &str = "Source Secret unavailable (see operator logs)";
+/// Message générique du status `Revoked` : informe l'utilisateur que la
+/// révocation a été appliquée côté Scaleway et indique le geste de
+/// remédiation. Ne contient AUCUN nom de Secret/clé (cohérent avec
+/// l'anonymisation SEC-002 : pas de fuite via `status.error_message`).
+const STATUS_REVOKED_GENERIC: &str =
+    "Source Secret opt-in revoked — Scaleway version disabled. Re-add label/annotation to re-sync.";
+
+/// État lu en UNE seule fois depuis le Secret K8s source.
+/// Évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
+///
+/// Type énuméré : le compilateur force l'invariant
+/// `payload presence ⟺ key_present`. Le variant `Missing` n'existe pas car
+/// la branche "Secret K8s absent" est traitée en amont par `read_k8s_secret_source`
+/// qui retourne `Err(SecretNotFound)` via `map_kube_get_error`. Quand on a un
+/// `KsSourceState`, le Secret K8s existe forcément.
+///
+/// Avant le refactor (issue #118) : `struct { resource_version: Option<String>,
+/// key_present: bool, payload: Option<Vec<u8>> }` reposait sur la discipline du
+/// code (deux `expect()` dans les branches CreateAndSync / PushNewVersion).
+#[derive(Debug)]
+enum KsSourceState {
+    /// Secret K8s lu avec succès, mais la clé demandée est absente de `.data`.
+    /// → `decide_next_action_secret` retourne `ErrorKsKeyNotFound` (permanent).
+    KeyAbsent { resource_version: String },
+    /// Secret K8s lu avec succès, clé présente, payload extrait.
+    Present {
+        resource_version: String,
+        payload: Vec<u8>,
+    },
+}
+
+/// Vérifie le label d'opt-in `scaleway.mathieubodin.io/allow-operator-read: "true"`.
+/// Contrat strict : seule la chaîne exacte `"true"` autorise la lecture ; toute autre
+/// valeur (absente, vide, `"yes"`, `"True"`) refuse l'opt-in. Fonction pure pour
+/// pouvoir verrouiller ce contrat par test unitaire.
+fn is_opt_in_granted(labels: Option<&std::collections::BTreeMap<String, String>>) -> bool {
+    labels
+        .and_then(|l| l.get(OPT_IN_LABEL))
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
+/// Vérifie que l'annotation `allowed-cr` du Secret K8s correspond à
+/// `<cr_namespace>/<cr_name>`. Ferme le scénario où un utilisateur avec
+/// `patch secrets` (mais sans `get secrets`) pourrait labelliser un Secret
+/// qu'il ne possède pas. La cible est une chaîne strictement égale —
+/// pas de wildcard, pas de liste — pour ne lier qu'à UN CR donné.
+fn is_cr_allowed_for_secret(
+    annotations: Option<&std::collections::BTreeMap<String, String>>,
+    cr_namespace: &str,
+    cr_name: &str,
+) -> bool {
+    let expected = format!("{}/{}", cr_namespace, cr_name);
+    annotations
+        .and_then(|a| a.get(ALLOWED_CR_ANNOTATION))
+        .map(|v| v == &expected)
+        .unwrap_or(false)
+}
+
+/// Mappe l'erreur d'un `get` sur l'API K8s vers une erreur métier explicite.
+/// Fonction pure — testable unitairement avec des `kube::error::Error::Api` fabriqués.
+///
+/// - 403 → `ConfigError` permanent (l'opérateur n'a pas le droit de lire les Secrets dans ce
+///   namespace ; le namespace n'est probablement pas bootstrappé)
+/// - 404 → `SecretNotFound` transitoire (le Secret peut être créé plus tard)
+/// - autre → `KubeError` transitoire
+fn map_kube_get_error(e: kube::error::Error, ks_name: &str, namespace: &str) -> OperatorError {
+    match e {
+        kube::error::Error::Api(ae) if ae.code == 403 => OperatorError::ConfigError(format!(
+            "Operator forbidden to read Secrets in namespace '{}' \
+             (RBAC denied — verify the namespace is bootstrapped)",
+            namespace
+        )),
+        kube::error::Error::Api(ae) if ae.code == 404 => OperatorError::SecretNotFound(format!(
+            "Kubernetes Secret '{}' not found in namespace '{}'",
+            ks_name, namespace
+        )),
+        other => OperatorError::KubeError(other),
+    }
+}
+
+/// Décompose un Secret K8s déjà lu en `KsSourceState` ou en erreur métier.
+/// Fonction pure — testable unitairement sans mock kube.
+///
+/// - opt-in label absent / != "true" → `SecretOptInMissing` permanent
+/// - sinon → `KsSourceState` avec resource_version, key_present, payload extraits
+fn parse_k8s_secret_source(
+    ks: &Secret,
+    ks_name: &str,
+    key: &str,
+    cr_namespace: &str,
+    cr_name: &str,
+) -> Result<KsSourceState> {
+    if !is_opt_in_granted(ks.metadata.labels.as_ref()) {
+        return Err(OperatorError::SecretOptInMissing(format!(
+            "Kubernetes Secret '{}' must carry label '{}: \"true\"'",
+            ks_name, OPT_IN_LABEL
+        )));
+    }
+    if !is_cr_allowed_for_secret(ks.metadata.annotations.as_ref(), cr_namespace, cr_name) {
+        return Err(OperatorError::SecretOptInMissing(format!(
+            "Kubernetes Secret '{}' must carry annotation '{}: \"{}/{}\"' to be read by this ScalewaySecret",
+            ks_name, ALLOWED_CR_ANNOTATION, cr_namespace, cr_name
+        )));
+    }
+
+    // Tout objet retourné par un GET kube-apiserver porte un resourceVersion ;
+    // un Secret sans resourceVersion ne peut pas exister côté serveur. On garde
+    // une valeur par défaut vide pour la robustesse — un rv vide forcera
+    // simplement un PushNewVersion au prochain reconcile (différent d'aujourd'hui).
+    let resource_version = ks.metadata.resource_version.clone().unwrap_or_default();
+    let payload = ks
+        .data
+        .as_ref()
+        .and_then(|d| d.get(key))
+        .map(|b| b.0.clone());
+
+    Ok(match payload {
+        Some(payload) => KsSourceState::Present {
+            resource_version,
+            payload,
+        },
+        None => KsSourceState::KeyAbsent { resource_version },
+    })
+}
+
+/// Lit le Secret K8s source en UN seul appel API, vérifie le label d'opt-in,
+/// et retourne l'état nécessaire à la décision + le payload pour les branches actives.
+///
+/// Combine `map_kube_get_error` et `parse_k8s_secret_source` (tous deux testés unitairement).
+async fn read_k8s_secret_source(
+    ctx: &Arc<Context>,
+    namespace: &str,
+    ks_ref: &crate::resources::KubernetesSecretRef,
+    cr_namespace: &str,
+    cr_name: &str,
+) -> Result<KsSourceState> {
+    let ks_api: Api<Secret> = Api::namespaced(ctx.client.clone(), namespace);
+    let ks = ks_api
+        .get(&ks_ref.name)
+        .await
+        .map_err(|e| map_kube_get_error(e, &ks_ref.name, namespace))?;
+    parse_k8s_secret_source(&ks, &ks_ref.name, &ks_ref.key, cr_namespace, cr_name)
+}
+
+/// Construit un status anonymisé pour les erreurs liées à la source Secret K8s.
+/// Préserve les champs non liés (scaleway_id, current_version, last_synced_resource_version)
+/// et écrase `error_message`/`sync_state`. Fonction pure pour test unitaire.
+fn build_anonymized_source_error_status(
+    current_status: &ScalewaySecretStatus,
+) -> ScalewaySecretStatus {
+    let mut status = current_status.clone();
+    status.error_message = Some(STATUS_ERROR_GENERIC.to_string());
+    status.sync_state = "Error".to_string();
+    status
+}
+
+/// Construit un status `Revoked` pour un Secret K8s précédemment synchronisé
+/// dont l'opt-in (label ou annotation `allowed-cr`) a été retiré par l'utilisateur.
+///
+/// Préserve `scaleway_id` et `current_version` (traçabilité + re-sync possible
+/// si l'utilisateur remet le label/annotation), efface
+/// `last_synced_resource_version` (la prochaine resync doit re-pousser une
+/// version), pose `sync_state = "Revoked"` et un `error_message` générique.
+/// Fonction pure pour test unitaire.
+fn build_revoked_status(current_status: &ScalewaySecretStatus) -> ScalewaySecretStatus {
+    let mut status = current_status.clone();
+    status.sync_state = "Revoked".to_string();
+    status.error_message = Some(STATUS_REVOKED_GENERIC.to_string());
+    // Reset du tracker de synchro : tout re-sync futur (label remis) doit
+    // pousser une nouvelle version, peu importe la resourceVersion courante.
+    status.last_synced_resource_version = None;
+    status
+}
+
+/// Désactive la version Scaleway courante et marque le status `Revoked`
+/// quand l'utilisateur retire le label/annotation opt-in d'un Secret K8s
+/// précédemment synchronisé.
+///
+/// Best-effort sur le call Scaleway (cohérent avec le pattern #114) : un
+/// échec est logué en `warn!`, le status est patché quand même pour signaler
+/// la révocation côté K8s. Si `current_version` est `None` (cas où le patch
+/// préliminaire #117 a posé `scaleway_id` mais `create_secret_version` n'a
+/// pas encore réussi), le disable est sauté — il n'y a rien à désactiver.
+async fn handle_opt_in_revocation(
+    ctx: &Arc<Context>,
+    secret_cr: &Arc<ScalewaySecret>,
+    api: &Api<ScalewaySecret>,
+    namespace: &str,
+    current_status: &ScalewaySecretStatus,
+    region: &str,
+    scaleway_id: &str,
+) {
+    tracing::warn!(
+        name = %secret_cr.name_any(),
+        namespace = %namespace,
+        scaleway_id = %scaleway_id,
+        "Opt-in label/annotation removed from previously synced Source Secret — revoking Scaleway version"
+    );
+
+    // Disable de la version courante (best-effort). Si aucune version n'a
+    // été créée (current_version=None) on saute proprement — pas de panic.
+    if let Some(revision) = current_status.current_version {
+        match get_namespace_client(ctx, namespace).await {
+            Ok(ns_client) => {
+                if let Err(e) = call_scaleway(ctx, || {
+                    ns_client.disable_secret_version(region, scaleway_id, revision)
+                })
+                .await
+                {
+                    tracing::warn!(
+                        name = %secret_cr.name_any(),
+                        scaleway_id = %scaleway_id,
+                        revision = revision,
+                        error = %e,
+                        "Failed to disable Scaleway secret version on opt-in revocation — best-effort, status will still be marked Revoked (see issue #116)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    name = %secret_cr.name_any(),
+                    scaleway_id = %scaleway_id,
+                    error = %e,
+                    "Could not build namespace client to disable Scaleway secret version — status will still be marked Revoked"
+                );
+            }
+        }
+    } else {
+        tracing::warn!(
+            name = %secret_cr.name_any(),
+            scaleway_id = %scaleway_id,
+            "No current_version recorded in status — skipping disable_secret_version (nothing to revoke on Scaleway)"
+        );
+    }
+
+    let status = build_revoked_status(current_status);
+    if let Err(e) = update_secret_status(secret_cr, api, status).await {
+        // La désactivation Scaleway a été tentée mais le patch status K8s a échoué.
+        // L'admin a besoin de pouvoir corréler "version Scaleway désactivée" vs "status
+        // K8s pas en Revoked". Le prochain reconcile retentera la séquence
+        // (disable est idempotent côté Scaleway, cf. test_disable_secret_version_already_disabled_is_ok).
+        tracing::warn!(
+            scaleway_id = %scaleway_id,
+            error = %e,
+            "Failed to patch Revoked status — Scaleway disable already applied, will retry on next reconcile"
+        );
+    }
+}
+
+/// Met à jour le status avec un message générique (anonymise les noms de Secret/clé)
+/// pour éviter la fuite par oracle d'existence depuis status.error_message.
+/// Le détail reste dans les tracing logs.
+async fn record_source_error_in_status(
+    secret_cr: &Arc<ScalewaySecret>,
+    api: &Api<ScalewaySecret>,
+    current_status: &ScalewaySecretStatus,
+    error: &OperatorError,
+) {
+    tracing::warn!(
+        name = %secret_cr.name_any(),
+        namespace = %secret_cr.namespace().unwrap_or_default(),
+        error = %error,
+        "ScalewaySecret source read failed"
+    );
+    let status = build_anonymized_source_error_status(current_status);
+    let _ = update_secret_status(secret_cr, api, status).await;
+}
+
+/// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
+struct SecretReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    /// La source (kubernetes_secret) est configurée dans le spec.
+    source_configured: bool,
+    /// ID Scaleway du secret, depuis le status.
+    scaleway_id: Option<String>,
+    /// resourceVersion du Secret K8s source à la dernière synchronisation,
+    /// depuis le status.
+    last_synced_resource_version: Option<String>,
+    /// resourceVersion courant du Secret K8s source.
+    /// None = K8s Secret introuvable (erreur transitoire).
+    current_resource_version: Option<String>,
+    /// La clé `spec.source.kubernetes_secret.key` existe dans `.data` du Secret K8s.
+    /// Pertinent uniquement quand current_resource_version est Some.
+    current_key_present: bool,
+}
+
+#[derive(Debug)]
+enum SecretReconcileDecision {
+    SkipCircuitOpen,
+    AddFinalizer,
+    /// Pas de source valide dans le spec — erreur permanente.
+    ErrorSourceNotConfigured,
+    /// Le K8s Secret source est absent — erreur transitoire.
+    ErrorKsSecretNotFound,
+    /// Le K8s Secret existe mais la clé référencée est absente de `.data` — erreur transitoire.
+    ErrorKsKeyNotFound,
+    /// Aucun secret Scaleway connu — créer et pousser la première version.
+    CreateAndSyncSecret,
+    /// Secret Scaleway connu, valeur changée — pousser une nouvelle version.
+    PushNewVersion {
+        scaleway_id: String,
+    },
+    /// Valeur inchangée — requeue périodique.
+    AlreadySynced,
+    /// Suppression demandée avec un secret Scaleway connu.
+    DeleteSecret,
+    /// Suppression sans secret Scaleway connu — retirer le finalizer.
+    RemoveFinalizer,
+}
+
+fn decide_next_action_secret(input: &SecretReconcileInput) -> SecretReconcileDecision {
+    // 1. Suppression prioritaire
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(_) => SecretReconcileDecision::DeleteSecret,
+            None => SecretReconcileDecision::RemoveFinalizer,
+        };
+    }
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return SecretReconcileDecision::SkipCircuitOpen;
+    }
+    // 3. Finalizer
+    if !input.finalizer_present {
+        return SecretReconcileDecision::AddFinalizer;
+    }
+    // 4. Source non configurée (permanent)
+    if !input.source_configured {
+        return SecretReconcileDecision::ErrorSourceNotConfigured;
+    }
+    // 5. K8s Secret introuvable (transitoire)
+    if input.current_resource_version.is_none() {
+        return SecretReconcileDecision::ErrorKsSecretNotFound;
+    }
+    // 5bis. K8s Secret présent mais clé manquante dans .data (transitoire — distinct du cas Secret absent)
+    if !input.current_key_present {
+        return SecretReconcileDecision::ErrorKsKeyNotFound;
+    }
+    // 6. Pas de secret Scaleway connu — créer
+    if input.scaleway_id.is_none() {
+        return SecretReconcileDecision::CreateAndSyncSecret;
+    }
+    // 7. Source modifiée depuis la dernière synchro — nouvelle version
+    if input.current_resource_version != input.last_synced_resource_version {
+        return SecretReconcileDecision::PushNewVersion {
+            scaleway_id: input.scaleway_id.clone().unwrap(),
+        };
+    }
+    // 8. Rien à faire
+    SecretReconcileDecision::AlreadySynced
+}
+
+pub async fn reconcile_scaleway_secret(
+    secret_cr: Arc<ScalewaySecret>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "scalewayssecret/{}/{}",
+        secret_cr.namespace().unwrap_or_default(),
+        secret_cr.name_any()
+    );
+    let result = reconcile_scaleway_secret_inner(secret_cr, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_scaleway_secret_inner(
+    secret_cr: Arc<ScalewaySecret>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let namespace = secret_cr.namespace().unwrap_or_default();
+    let api: Api<ScalewaySecret> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    tracing::info!(
+        name = %secret_cr.name_any(),
+        namespace = %namespace,
+        "Reconciling ScalewaySecret"
+    );
+
+    let deletion_requested = secret_cr.metadata.deletion_timestamp.is_some();
+    let circuit_open = ctx.is_circuit_open();
+    let finalizer_present = secret_cr
+        .metadata
+        .finalizers
+        .as_ref()
+        .unwrap_or(&vec![])
+        .contains(&SECRET_FINALIZER.to_string());
+
+    let source_configured = secret_cr.spec.source.kubernetes_secret.is_some();
+
+    let current_status = secret_cr.status.clone().unwrap_or_default();
+
+    // Lecture UNIQUE du Secret K8s source — la TOCTOU sur le label d'opt-in est éliminée
+    // car la valeur extraite (payload) provient du MÊME `get` qui a vérifié l'opt-in.
+    // Les branches CreateAndSyncSecret et PushNewVersion réutilisent `ks_payload`
+    // au lieu de re-lire le Secret (et de risquer une fenêtre de race).
+    let (current_resource_version, current_key_present, mut ks_payload) =
+        if !deletion_requested && source_configured {
+            let ks_ref = secret_cr.spec.source.kubernetes_secret.as_ref().unwrap();
+            let cr_name = secret_cr.name_any();
+            match read_k8s_secret_source(&ctx, &namespace, ks_ref, &namespace, &cr_name).await {
+                // Le type enum (issue #118) garantit ici l'invariant
+                // `payload presence ⟺ key_present` au niveau du compilateur :
+                // plus de risque de désync entre les trois variables locales.
+                Ok(KsSourceState::KeyAbsent { resource_version }) => {
+                    (Some(resource_version), false, None)
+                }
+                Ok(KsSourceState::Present {
+                    resource_version,
+                    payload,
+                }) => (Some(resource_version), true, Some(payload)),
+                Err(OperatorError::SecretNotFound(_)) => {
+                    // Cas "Secret K8s absent" — traité par le decide layer via ErrorKsSecretNotFound.
+                    (None, false, None)
+                }
+                Err(e) => {
+                    // Révocation explicite : l'utilisateur retire le label/annotation
+                    // opt-in d'un Secret K8s précédemment synchronisé. On désactive
+                    // la version Scaleway (best-effort) et on marque le status
+                    // `Revoked` sans toucher les autres branches d'erreur, qui
+                    // continuent l'anonymisation SEC-002 via record_source_error_in_status.
+                    if matches!(&e, OperatorError::SecretOptInMissing(_)) {
+                        if let Some(sid) = current_status.scaleway_id.clone() {
+                            handle_opt_in_revocation(
+                                &ctx,
+                                &secret_cr,
+                                &api,
+                                &namespace,
+                                &current_status,
+                                &secret_cr.spec.region,
+                                &sid,
+                            )
+                            .await;
+                            return Err(e);
+                        }
+                    }
+                    record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
+                    return Err(e);
+                }
+            }
+        } else {
+            (None, false, None)
+        };
+
+    let input = SecretReconcileInput {
+        deletion_requested,
+        circuit_open,
+        finalizer_present,
+        source_configured,
+        scaleway_id: current_status.scaleway_id.clone(),
+        last_synced_resource_version: current_status.last_synced_resource_version.clone(),
+        current_resource_version: current_resource_version.clone(),
+        current_key_present,
+    };
+
+    let decision = decide_next_action_secret(&input);
+
+    match decision {
+        SecretReconcileDecision::SkipCircuitOpen => {
+            tracing::warn!(
+                name = %secret_cr.name_any(),
+                "Scaleway API circuit breaker is open — skipping secret reconciliation"
+            );
+            Err(OperatorError::CircuitBreakerOpen)
+        }
+
+        SecretReconcileDecision::AddFinalizer => {
+            add_secret_finalizer(&secret_cr, &api).await?;
+            Ok(Action::requeue(Duration::from_secs(5)))
+        }
+
+        SecretReconcileDecision::ErrorSourceNotConfigured => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let e = OperatorError::SecretSourceNotConfigured(
+                "spec.source must have kubernetes_secret configured".to_string(),
+            );
+            let mut status = current_status;
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_secret_status(&secret_cr, &api, status).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
+            Err(e)
+        }
+
+        SecretReconcileDecision::ErrorKsSecretNotFound => {
+            let ks_name = secret_cr
+                .spec
+                .source
+                .kubernetes_secret
+                .as_ref()
+                .map(|r| r.name.as_str())
+                .unwrap_or("<unknown>");
+            // Détail dans les logs uniquement ; status reste générique pour éviter
+            // l'oracle de présence des Secrets via status.error_message.
+            let e = OperatorError::SecretNotFound(format!(
+                "Kubernetes Secret '{}' not found in namespace '{}'",
+                ks_name, namespace
+            ));
+            record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
+            Err(e)
+        }
+
+        SecretReconcileDecision::ErrorKsKeyNotFound => {
+            let (ks_name, ks_key) = secret_cr
+                .spec
+                .source
+                .kubernetes_secret
+                .as_ref()
+                .map(|r| (r.name.as_str(), r.key.as_str()))
+                .unwrap_or(("<unknown>", "<unknown>"));
+            // SecretKeyNotFound est permanent : retry exponentiel infini sur une clé
+            // absente est un DoS auto-infligé puisque seule une édition du CR ou du
+            // Secret la fait apparaître. Détail dans logs, status générique.
+            let e = OperatorError::SecretKeyNotFound(format!(
+                "Key '{}' not found in Kubernetes Secret '{}' in namespace '{}'",
+                ks_key, ks_name, namespace
+            ));
+            record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
+            Err(e)
+        }
+
+        SecretReconcileDecision::CreateAndSyncSecret => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            let project_id =
+                match get_project_id_from_namespace_resource(secret_cr.as_ref(), &ctx).await {
+                    Ok(pid) => pid,
+                    Err(e) => {
+                        let mut status = current_status;
+                        status.error_message = Some(e.for_status());
+                        status.sync_state = "Error".to_string();
+                        let _ = update_secret_status(&secret_cr, &api, status).await;
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        return Err(e);
+                    }
+                };
+
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_secret_status(&secret_cr, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            // Adoption : chercher un secret Scaleway existant avec les tags opérateur
+            let cr_name = secret_cr.name_any();
+            let scaleway_id = match call_scaleway(&ctx, || {
+                ns_client.find_scaleway_secret_by_tags(
+                    &secret_cr.spec.region,
+                    &project_id,
+                    &namespace,
+                    &cr_name,
+                )
+            })
+            .await?
+            {
+                Some(existing_id) => {
+                    tracing::warn!(
+                        name = %cr_name,
+                        scaleway_id = %existing_id,
+                        "Adopted existing Scaleway secret"
+                    );
+                    existing_id
+                }
+                None => call_scaleway(&ctx, || {
+                    ns_client.create_scaleway_secret(
+                        &secret_cr.spec.region,
+                        &secret_cr.spec.name,
+                        &project_id,
+                        secret_cr.spec.description.as_deref(),
+                        &secret_cr.spec.tags,
+                        &namespace,
+                        &cr_name,
+                    )
+                })
+                .await
+                .inspect_err(|_| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                })?,
+            };
+
+            // Reserve-intent (issue #117) : ancrer le `scaleway_id` dans le status K8s
+            // AVANT tout `create_secret_version`. Sans ce patch préliminaire, si
+            // `create_secret_version` réussit puis le PATCH status final échoue
+            // (conflit 409, webhook tiers, kube-apiserver transient), le reconcile
+            // suivant ré-entre dans `CreateAndSyncSecret` (scaleway_id=None dans le
+            // status), `find_scaleway_secret_by_tags` adopte le secret existant, et
+            // un 2e `create_secret_version` crée une version active en double.
+            //
+            // Avec ce patch préliminaire :
+            //  - Si l'update échoue : pas encore de side-effect Scaleway sur les
+            //    versions → aucune dérive (le `?` propage l'Err avant
+            //    `create_secret_version`).
+            //  - Si `create_secret_version` réussit puis l'update final échoue : le
+            //    reconcile suivant aura `scaleway_id=Some(...)` et
+            //    `last_synced_resource_version=None`, donc `decide_next_action_secret`
+            //    retourne `PushNewVersion` (pas `CreateAndSyncSecret`). La branche
+            //    `PushNewVersion` applique le pattern #114 (update_status d'abord),
+            //    et le secret Scaleway ne sera pas re-créé.
+            //
+            // Trade-off : un cycle de réconciliation supplémentaire en cas d'échec
+            // entre étape 3 et étape 6, contre l'élimination du risque de
+            // duplication du secret Scaleway côté adoption.
+            let mut prelim_status = current_status.clone();
+            prelim_status.scaleway_id = Some(scaleway_id.clone());
+            prelim_status.sync_state = "Syncing".to_string();
+            prelim_status.error_message = None;
+            prelim_status.current_version = None;
+            prelim_status.last_synced_resource_version = None;
+            update_secret_status(&secret_cr, &api, prelim_status)
+                .await
+                .inspect_err(|_| {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                })?;
+
+            // Payload et resource_version proviennent de la lecture UNIQUE en amont —
+            // évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
+            //
+            // L'invariant `payload presence ⟺ key_present` est forcé par
+            // l'enum `KsSourceState` (issue #118). `decide_next_action_secret`
+            // garantit qu'on n'atteint cette branche que si `key_present=true`,
+            // donc `ks_payload` est forcément `Some`. La branche `None` ne peut
+            // pas être atteinte ; on évite cependant `expect()` (panic) en
+            // retournant une erreur tracée avec un `tracing::error!` haute
+            // visibilité (revue Opus correctness #118 : OperatorError::Unknown
+            // est transitoire — sans le log error, une régression du decide
+            // layer bouclerait silencieusement).
+            let payload = ks_payload.take().ok_or_else(|| {
+                let msg =
+                    "internal invariant violation: CreateAndSyncSecret reached without payload \
+                           (decide_next_action_secret should guarantee key_present=true)";
+                tracing::error!(
+                    cr = %secret_cr.name_any(),
+                    namespace = %namespace,
+                    "{msg} — operator bug, please report"
+                );
+                OperatorError::Unknown(msg.to_string())
+            })?;
+
+            // Si create_secret_version échoue après le patch préliminaire "Syncing",
+            // il faut transitionner le status vers "Error" sinon le CR reste en
+            // "Syncing" indéfiniment (le prochain reconcile entrerait par PushNewVersion
+            // et n'effacerait pas cet état tant que le Secret K8s source reste lisible).
+            // Revue Opus correctness — finding observabilité de l'issue #117.
+            let revision = match call_scaleway(&ctx, || {
+                ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
+            })
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let mut err_status = current_status.clone();
+                    err_status.scaleway_id = Some(scaleway_id.clone());
+                    err_status.sync_state = "Error".to_string();
+                    err_status.error_message = Some(e.for_status());
+                    let _ = update_secret_status(&secret_cr, &api, err_status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            let mut status = current_status;
+            status.scaleway_id = Some(scaleway_id);
+            status.current_version = Some(revision);
+            status.last_synced_resource_version = current_resource_version.clone();
+            status.sync_state = "Synced".to_string();
+            status.error_message = None;
+            update_secret_status(&secret_cr, &api, status).await?;
+
+            measurer.set_outcome(ReconcileOutcome::Created);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    status.sync_state = "Error".to_string();
+                    let _ = update_secret_status(&secret_cr, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            // Payload et resource_version proviennent de la lecture UNIQUE en amont.
+            // Cf. branche CreateAndSyncSecret ci-dessus pour le détail de
+            // l'invariant. Le type `KsSourceState` (issue #118) garantit
+            // l'invariant côté parsing ; ce `ok_or_else` reste défensif côté
+            // décision (en cas de régression future du decide layer).
+            let payload = ks_payload.take().ok_or_else(|| {
+                let msg = "internal invariant violation: PushNewVersion reached without payload \
+                           (decide_next_action_secret should guarantee key_present=true)";
+                tracing::error!(
+                    cr = %secret_cr.name_any(),
+                    namespace = %namespace,
+                    "{msg} — operator bug, please report"
+                );
+                OperatorError::Unknown(msg.to_string())
+            })?;
+
+            let old_revision = current_status.current_version;
+
+            let new_revision = call_scaleway(&ctx, || {
+                ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
+            })
+            .await
+            .inspect_err(|_| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+            })?;
+
+            // Tracker la nouvelle révision AVANT de tenter le disable de l'ancienne.
+            // Invariant (issue #114) : si le status est mis à jour en premier avec
+            // `last_synced_resource_version = current_resource_version`, alors un
+            // échec ultérieur sur disable ne déclenche pas un re-PushNewVersion au
+            // prochain reconcile (la décision sera AlreadySynced). Sans cet ordre,
+            // chaque échec transitoire sur disable créerait une version active
+            // supplémentaire sur Scaleway → dérive.
+            //
+            // Limite explicite (revue Opus correctness) : la garantie est conditionnée
+            // au succès de `update_secret_status` (le `?` ligne suivante propage l'Err).
+            // Si la mise à jour du status K8s échoue durablement (5xx persistant,
+            // conflit 409, kube-apiserver down) ALORS que `create_secret_version` a
+            // réussi, le reconcile suivant re-décidera `PushNewVersion` et créera une
+            // 2e version active sur Scaleway. Probabilité faible (PATCH idempotent +
+            // retry kube-rs) mais non nulle. La fix #114 réduit donc la fenêtre de
+            // dérive sans l'éliminer totalement.
+            let mut status = current_status;
+            status.current_version = Some(new_revision);
+            status.last_synced_resource_version = current_resource_version.clone();
+            status.sync_state = "Synced".to_string();
+            status.error_message = None;
+            update_secret_status(&secret_cr, &api, status).await?;
+
+            // Désactiver l'ancienne version en best-effort (idempotent si déjà désactivée).
+            // Trade-off accepté (issue #114) : si le disable échoue durablement, l'ancienne
+            // version reste `enabled` sur Scaleway jusqu'à intervention manuelle ou prochaine
+            // rotation. La nouvelle version est correctement référencée et active.
+            // On préfère cette dérive bornée à la création répétée de nouvelles versions
+            // à chaque reconcile en cas d'échec transitoire du disable.
+            if let Some(old_rev) = old_revision {
+                if let Err(e) = call_scaleway(&ctx, || {
+                    ns_client.disable_secret_version(&secret_cr.spec.region, &scaleway_id, old_rev)
+                })
+                .await
+                {
+                    tracing::warn!(
+                        name = %secret_cr.name_any(),
+                        revision = old_rev,
+                        error = %e,
+                        "Failed to disable old secret version — best-effort, will not fail reconcile (see issue #114)"
+                    );
+                }
+            }
+
+            measurer.set_outcome(ReconcileOutcome::Synced);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::AlreadySynced => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            measurer.set_outcome(ReconcileOutcome::Synced);
+            Ok(Action::requeue(Duration::from_secs(30)))
+        }
+
+        SecretReconcileDecision::DeleteSecret => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+
+            if let Some(scaleway_id) = &current_status.scaleway_id {
+                match get_namespace_client(&ctx, &namespace).await {
+                    Ok(ns_client) => {
+                        if let Err(e) = call_scaleway(&ctx, || {
+                            ns_client.delete_scaleway_secret(&secret_cr.spec.region, scaleway_id)
+                        })
+                        .await
+                        {
+                            tracing::error!(
+                                name = %secret_cr.name_any(),
+                                error = %e,
+                                "Failed to delete Scaleway secret"
+                            );
+                            measurer.set_outcome(ReconcileOutcome::Error);
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            name = %secret_cr.name_any(),
+                            scaleway_id = %scaleway_id,
+                            error = %e,
+                            "IAM Secret missing during deletion — skipping Scaleway API call"
+                        );
+                    }
+                }
+            }
+
+            // Retirer le finalizer
+            let finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+            let new_finalizers: Vec<String> = finalizers
+                .into_iter()
+                .filter(|f| f != SECRET_FINALIZER)
+                .collect();
+
+            let patch = serde_json::json!({ "metadata": { "finalizers": new_finalizers } });
+            api.patch(
+                &secret_cr.name_any(),
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+
+        SecretReconcileDecision::RemoveFinalizer => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+            let new_finalizers: Vec<String> = finalizers
+                .into_iter()
+                .filter(|f| f != SECRET_FINALIZER)
+                .collect();
+
+            let patch = serde_json::json!({ "metadata": { "finalizers": new_finalizers } });
+            api.patch(
+                &secret_cr.name_any(),
+                &PatchParams::default(),
+                &Patch::Merge(patch),
+            )
+            .await
+            .map_err(|e| {
+                measurer.set_outcome(ReconcileOutcome::Error);
+                OperatorError::KubeError(e)
+            })?;
+
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+    }
+}
+
+async fn add_secret_finalizer(secret_cr: &ScalewaySecret, api: &Api<ScalewaySecret>) -> Result<()> {
+    let mut finalizers = secret_cr.metadata.finalizers.clone().unwrap_or_default();
+    finalizers.push(SECRET_FINALIZER.to_string());
+    let patch = serde_json::json!({ "metadata": { "finalizers": finalizers } });
+    api.patch(
+        &secret_cr.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
     )
-    // CircuitBreakerOpen is explicitly transient — backoff applies, not await_change
-    // KubeError, ScalewayError, NetworkError, SerializationError, FinalizationError, Unknown:
-    // all transient by exhaustive exclusion
+    .await?;
+    Ok(())
+}
+
+async fn update_secret_status(
+    secret_cr: &ScalewaySecret,
+    api: &Api<ScalewaySecret>,
+    status: ScalewaySecretStatus,
+) -> Result<()> {
+    let patch = serde_json::json!({ "status": status });
+    api.patch_status(
+        &secret_cr.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
+    Ok(())
 }
 
 fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
-    if is_permanent_error(error) {
+    if error.is_permanent_error() {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
@@ -1422,10 +2303,13 @@ mod tests {
     #[test]
     fn test_decide_no_scaleway_id_write_role_returns_create() {
         let input = base_input();
-        assert!(matches!(
-            decide_next_action(&input),
-            ReconcileDecision::CreateInstance { .. }
-        ));
+        let decision = decide_next_action(&input);
+        let ReconcileDecision::CreateInstance { project_id } = decision else {
+            panic!("expected CreateInstance, got {decision:?}");
+        };
+        // Verrouille la propagation du project_id depuis l'input — verrouille contre
+        // un copier-coller `input.scaleway_id` au lieu de `input.project_id`.
+        assert_eq!(project_id, input.project_id);
     }
 
     #[test]
@@ -1434,10 +2318,31 @@ mod tests {
             scaleway_id: Some("srv-abc123".to_string()),
             ..base_input()
         };
-        assert!(matches!(
-            decide_next_action(&input),
-            ReconcileDecision::SyncInstance { .. }
-        ));
+        let decision = decide_next_action(&input);
+        let ReconcileDecision::SyncInstance {
+            scaleway_id,
+            project_id,
+        } = decision
+        else {
+            panic!("expected SyncInstance, got {decision:?}");
+        };
+        assert_eq!(scaleway_id, "srv-abc123");
+        assert_eq!(project_id, input.project_id);
+    }
+
+    #[test]
+    fn test_decide_no_status_project_id_returns_verify_with_project_id() {
+        // Branche VerifyProjectAccess : doit propager input.project_id (jamais
+        // input.scaleway_id ni autre champ — guard contre copier-coller).
+        let input = ReconcileInput {
+            status_project_id: None,
+            ..base_input()
+        };
+        let decision = decide_next_action(&input);
+        let ReconcileDecision::VerifyProjectAccess { project_id } = decision else {
+            panic!("expected VerifyProjectAccess, got {decision:?}");
+        };
+        assert_eq!(project_id, input.project_id);
     }
 
     #[test]
@@ -1463,6 +2368,58 @@ mod tests {
         assert!(matches!(
             decide_next_action(&input),
             ReconcileDecision::RemoveFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_decide_deletion_takes_priority_over_circuit_open() {
+        // Invariant critique : la suppression doit fonctionner même quand l'API
+        // Scaleway est down. Sinon un user ne peut pas retirer un finalizer pendant
+        // une panne et son CR reste bloqué indéfiniment.
+        let input = ReconcileInput {
+            deletion_requested: true,
+            circuit_open: true,
+            scaleway_id: Some("srv-abc".to_string()),
+            ..base_input()
+        };
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::DeleteInstance
+        ));
+    }
+
+    #[test]
+    fn test_decide_finalizer_added_before_role_check() {
+        // Invariant : le finalizer doit être ajouté AVANT toute vérification de rôle
+        // ou tout side effect Scaleway. Sinon un Secret IAM Viewer avec finalizer
+        // absent serait bloqué sur BlockReadOnlyRole alors qu'il devrait d'abord
+        // recevoir le finalizer.
+        let input = ReconcileInput {
+            finalizer_present: false,
+            scaleway_role: "Viewer".to_string(),
+            ..base_input()
+        };
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::AddFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_decide_circuit_open_skips_even_when_finalizer_absent() {
+        // Documente le comportement actuel : circuit_open prend la priorité sur
+        // l'ajout du finalizer. Argument design : éviter toute interaction avec
+        // l'API en cas de cascade d'erreur. Cohérent dans les 3 reconcilers
+        // (Instance / LB / Secret). À reconsidérer si une PR future veut
+        // dissocier les actions purement K8s du circuit breaker.
+        let input = ReconcileInput {
+            finalizer_present: false,
+            circuit_open: true,
+            ..base_input()
+        };
+        assert!(matches!(
+            decide_next_action(&input),
+            ReconcileDecision::SkipCircuitOpen
         ));
     }
 
@@ -1520,10 +2477,11 @@ mod tests {
     #[test]
     fn test_lb_decide_default_base_returns_create() {
         let input = base_lb_input();
-        assert!(matches!(
-            decide_next_action_lb(&input),
-            LbReconcileDecision::CreateLoadBalancer { .. }
-        ));
+        let decision = decide_next_action_lb(&input);
+        let LbReconcileDecision::CreateLoadBalancer { project_id } = decision else {
+            panic!("expected CreateLoadBalancer, got {decision:?}");
+        };
+        assert_eq!(project_id, input.project_id);
     }
 
     #[test]
@@ -1556,10 +2514,16 @@ mod tests {
             scaleway_id: Some("lb-abc".to_string()),
             ..base_lb_input()
         };
-        assert!(matches!(
-            decide_next_action_lb(&input),
-            LbReconcileDecision::SyncLoadBalancer { .. }
-        ));
+        let decision = decide_next_action_lb(&input);
+        let LbReconcileDecision::SyncLoadBalancer {
+            scaleway_id,
+            project_id,
+        } = decision
+        else {
+            panic!("expected SyncLoadBalancer, got {decision:?}");
+        };
+        assert_eq!(scaleway_id, "lb-abc");
+        assert_eq!(project_id, input.project_id);
     }
 
     #[test]
@@ -1589,6 +2553,50 @@ mod tests {
     }
 
     #[test]
+    fn test_lb_decide_deletion_takes_priority_over_circuit_open() {
+        // Cf. test_decide_deletion_takes_priority_over_circuit_open (Instance) —
+        // la suppression doit fonctionner même quand l'API Scaleway est down.
+        let input = LbReconcileInput {
+            deletion_requested: true,
+            circuit_open: true,
+            scaleway_id: Some("lb-abc".to_string()),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::DeleteLoadBalancer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_finalizer_added_before_role_check() {
+        // L'ajout du finalizer précède toute vérification Scaleway.
+        let input = LbReconcileInput {
+            finalizer_present: false,
+            scaleway_role: "Viewer".to_string(),
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::AddLbFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_lb_decide_circuit_open_skips_even_when_finalizer_absent() {
+        // Cf. test_decide_circuit_open_skips_even_when_finalizer_absent (Instance).
+        let input = LbReconcileInput {
+            finalizer_present: false,
+            circuit_open: true,
+            ..base_lb_input()
+        };
+        assert!(matches!(
+            decide_next_action_lb(&input),
+            LbReconcileDecision::SkipCircuitOpen
+        ));
+    }
+
+    #[test]
     fn test_lb_decide_viewer_role_returns_block() {
         let input = LbReconcileInput {
             scaleway_role: "Viewer".to_string(),
@@ -1606,10 +2614,11 @@ mod tests {
             status_project_id: None,
             ..base_lb_input()
         };
-        assert!(matches!(
-            decide_next_action_lb(&input),
-            LbReconcileDecision::VerifyProjectAccessLb { .. }
-        ));
+        let decision = decide_next_action_lb(&input);
+        let LbReconcileDecision::VerifyProjectAccessLb { project_id } = decision else {
+            panic!("expected VerifyProjectAccessLb, got {decision:?}");
+        };
+        assert_eq!(project_id, input.project_id);
     }
 
     // --- retry_counts key format ---
@@ -1626,60 +2635,6 @@ mod tests {
         );
         assert!(instance_key.starts_with("instance/"));
         assert!(lb_key.starts_with("loadbalancer/"));
-    }
-
-    // --- is_permanent_error / error_policy classification ---
-
-    #[test]
-    fn test_config_error_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::ConfigError(
-            "bad annotation".into()
-        )));
-    }
-
-    #[test]
-    fn test_invalid_zone_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::InvalidZone(
-            "us-east-1".into()
-        )));
-    }
-
-    #[test]
-    fn test_invalid_instance_type_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::InvalidInstanceType(
-            "MEGA-XL".into()
-        )));
-    }
-
-    #[test]
-    fn test_project_access_denied_is_permanent() {
-        assert!(is_permanent_error(&OperatorError::ProjectAccessDenied(
-            "proj-x".into()
-        )));
-    }
-
-    #[test]
-    fn test_scaleway_error_is_transient() {
-        assert!(!is_permanent_error(&OperatorError::ScalewayError {
-            status: "500 Internal Server Error".into(),
-            message: "server error".into(),
-        }));
-    }
-
-    #[test]
-    fn test_kube_error_is_transient() {
-        // KubeError wraps kube::error::Error — difficile à construire directement.
-        // On vérifie via FinalizationError comme proxy d'erreur non-permanente.
-        assert!(!is_permanent_error(&OperatorError::FinalizationError(
-            "timeout".into()
-        )));
-    }
-
-    #[test]
-    fn test_unknown_error_is_transient() {
-        assert!(!is_permanent_error(&OperatorError::Unknown(
-            "mystery".into()
-        )));
     }
 
     // ── ReconcileMeasurer unit tests ─────────────────────────────────────────
@@ -2031,5 +2986,805 @@ mod tests {
 
         // Le LB est à la 1re tentative (30s), pas à la 2e (60s)
         assert_eq!(lb_action, Action::requeue(Duration::from_secs(30)));
+    }
+
+    // ── decide_next_action_secret unit tests ───────────────────────────────────
+
+    fn base_secret_input() -> SecretReconcileInput {
+        SecretReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            source_configured: true,
+            scaleway_id: Some("sec-abc123".to_string()),
+            last_synced_resource_version: Some("12345".to_string()),
+            current_resource_version: Some("12345".to_string()),
+            current_key_present: true,
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_already_synced() {
+        let input = base_secret_input();
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::AlreadySynced
+        ));
+    }
+
+    /// Documentation d'invariant pour l'issue #114 — couche PURE uniquement.
+    ///
+    /// Sous l'hypothèse que `reconcile_scaleway_secret_inner` appelle bien
+    /// `update_secret_status` AVANT `disable_secret_version` (l'ordre fixé par
+    /// #114), le decide layer garantit que `last_synced_resource_version ==
+    /// current_resource_version` mène à `AlreadySynced` — donc pas de
+    /// re-PushNewVersion même si le disable a échoué.
+    ///
+    /// ⚠️ Ce test NE verrouille PAS l'ordre des side-effects dans la couche
+    /// I/O — il documente seulement l'invariant decide qui rend la fix
+    /// correcte. Un test mockito sur `reconcile_scaleway_secret_inner` avec
+    /// `create_secret_version=200` + `disable_secret_version=500` est nécessaire
+    /// pour vraiment détecter une régression d'ordre. Tracé dans l'issue #118
+    /// (tests d'intégration ScalewaySecret).
+    #[test]
+    fn test_decide_after_successful_push_with_failed_disable_is_already_synced() {
+        let input = SecretReconcileInput {
+            last_synced_resource_version: Some("rv-after".to_string()),
+            current_resource_version: Some("rv-after".to_string()),
+            ..base_secret_input()
+        };
+        assert!(
+            matches!(
+                decide_next_action_secret(&input),
+                SecretReconcileDecision::AlreadySynced
+            ),
+            "decide layer must yield AlreadySynced when rvs match (post-push state — issue #114)"
+        );
+    }
+
+    /// Documentation d'invariant pour l'issue #117 — couche PURE uniquement.
+    ///
+    /// Le pattern reserve-intent dans `CreateAndSyncSecret` patch un status
+    /// préliminaire avec `scaleway_id=Some(...)`, `current_version=None` et
+    /// `last_synced_resource_version=None` AVANT le `create_secret_version`.
+    /// Si la séquence est interrompue (échec entre étape 3 et étape 6), le
+    /// reconcile suivant doit retomber dans `PushNewVersion` (pas
+    /// `CreateAndSyncSecret`) pour éviter une re-création du secret Scaleway
+    /// via adoption + duplication de version.
+    ///
+    /// Ce test verrouille l'invariant decide qui rend cette stratégie correcte :
+    /// `scaleway_id=Some` + `last_synced_rv=None` + `current_rv=Some` produit
+    /// `PushNewVersion`. La branche PushNewVersion applique elle-même le
+    /// pattern #114 (update_status d'abord, disable best-effort).
+    ///
+    /// ⚠️ Ce test NE verrouille PAS la séquence de PATCH côté I/O — il
+    /// documente seulement l'invariant decide. Test mockito tracé dans #118.
+    #[test]
+    fn test_decide_after_interrupted_create_and_sync_is_push_new_version() {
+        let input = SecretReconcileInput {
+            scaleway_id: Some("sec-after-prelim".to_string()),
+            last_synced_resource_version: None,
+            current_resource_version: Some("rv-1".to_string()),
+            ..base_secret_input()
+        };
+        match decide_next_action_secret(&input) {
+            SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+                assert_eq!(
+                    scaleway_id, "sec-after-prelim",
+                    "decide must forward the persisted scaleway_id so the next reconcile reuses the existing Scaleway secret (issue #117)"
+                );
+            }
+            other => panic!(
+                "expected PushNewVersion after interrupted CreateAndSync (issue #117), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_circuit_open_skips() {
+        let input = SecretReconcileInput {
+            circuit_open: true,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::SkipCircuitOpen
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_finalizer_absent_adds_finalizer() {
+        let input = SecretReconcileInput {
+            finalizer_present: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::AddFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_source_not_configured_returns_error() {
+        let input = SecretReconcileInput {
+            source_configured: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorSourceNotConfigured
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_ks_secret_not_found_returns_error() {
+        let input = SecretReconcileInput {
+            current_resource_version: None,
+            current_key_present: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorKsSecretNotFound
+        ));
+    }
+
+    // ── is_opt_in_granted (label contract) ────────────────────────────────────
+
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_opt_in_granted_only_when_label_value_is_exactly_true() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "true".to_string(),
+        );
+        assert!(is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_no_labels() {
+        assert!(!is_opt_in_granted(None));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_absent() {
+        let labels: BTreeMap<String, String> = BTreeMap::new();
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_capitalized() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "True".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_yes() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "yes".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    #[test]
+    fn test_opt_in_denied_when_label_value_empty_string() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "scaleway.mathieubodin.io/allow-operator-read".to_string(),
+            "".to_string(),
+        );
+        assert!(!is_opt_in_granted(Some(&labels)));
+    }
+
+    // ── map_kube_get_error (403/404/autre) ─────────────────────────────────────
+
+    fn api_error(code: u16) -> kube::error::Error {
+        use kube::core::Status;
+        kube::error::Error::Api(Box::new(Status {
+            code,
+            message: format!("HTTP {code}"),
+            reason: "Test".to_string(),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn test_map_kube_get_error_403_returns_config_error_permanent() {
+        let mapped = map_kube_get_error(api_error(403), "db-pass", "team-a");
+        let OperatorError::ConfigError(msg) = &mapped else {
+            panic!("expected ConfigError, got {mapped:?}");
+        };
+        assert!(
+            msg.contains("RBAC denied"),
+            "message should hint at RBAC misconfiguration, got: {msg}"
+        );
+        assert!(
+            msg.contains("team-a"),
+            "message should name the namespace, got: {msg}"
+        );
+        assert!(
+            mapped.is_permanent_error(),
+            "403 must be permanent (no retry until namespace is bootstrapped)"
+        );
+    }
+
+    #[test]
+    fn test_map_kube_get_error_404_returns_secret_not_found_transient() {
+        let mapped = map_kube_get_error(api_error(404), "db-pass", "team-a");
+        let OperatorError::SecretNotFound(msg) = &mapped else {
+            panic!("expected SecretNotFound, got {mapped:?}");
+        };
+        assert!(
+            msg.contains("db-pass"),
+            "message should name the Secret: {msg}"
+        );
+        assert!(
+            msg.contains("team-a"),
+            "message should name the namespace: {msg}"
+        );
+        assert!(
+            !mapped.is_permanent_error(),
+            "404 must be transient (Secret can appear later)"
+        );
+    }
+
+    #[test]
+    fn test_map_kube_get_error_500_returns_kube_error_transient() {
+        let mapped = map_kube_get_error(api_error(500), "x", "ns");
+        assert!(matches!(mapped, OperatorError::KubeError(_)));
+        assert!(!mapped.is_permanent_error(), "5xx must be transient");
+    }
+
+    // ── parse_k8s_secret_source (opt-in + key extraction) ─────────────────────
+
+    fn k8s_secret(
+        labels: Option<BTreeMap<String, String>>,
+        annotations: Option<BTreeMap<String, String>>,
+        data: Option<BTreeMap<String, k8s_openapi::ByteString>>,
+        rv: Option<&str>,
+    ) -> Secret {
+        Secret {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("db-pass".to_string()),
+                namespace: Some("team-a".to_string()),
+                labels,
+                annotations,
+                resource_version: rv.map(String::from),
+                ..Default::default()
+            },
+            data,
+            ..Default::default()
+        }
+    }
+
+    /// Construit l'annotation `allowed-cr` ciblant `team-a/db-sync` —
+    /// le couple CR utilisé dans tous les tests parse_k8s_secret_source_*.
+    fn allowed_cr_annotations() -> BTreeMap<String, String> {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/db-sync".to_string(),
+        );
+        a
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_opt_in_missing_when_label_absent() {
+        let ks = k8s_secret(None, None, None, Some("12345"));
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        let OperatorError::SecretOptInMissing(msg) = &err else {
+            panic!("expected SecretOptInMissing, got {err:?}");
+        };
+        assert!(
+            msg.contains(OPT_IN_LABEL),
+            "message should mention the label key"
+        );
+        assert!(err.is_permanent_error(), "opt-in missing must be permanent");
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_state_with_payload_on_success() {
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
+
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
+
+        match state {
+            KsSourceState::Present {
+                resource_version,
+                payload,
+            } => {
+                assert_eq!(resource_version, "12345");
+                assert_eq!(payload, b"s3cret".to_vec());
+            }
+            other => panic!("expected KsSourceState::Present, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_state_without_payload_when_key_absent() {
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        // Le Secret porte une autre clé que celle référencée par le CR.
+        data.insert(
+            "other_key".to_string(),
+            k8s_openapi::ByteString(b"x".to_vec()),
+        );
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
+
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
+
+        match state {
+            KsSourceState::KeyAbsent { resource_version } => {
+                assert_eq!(resource_version, "12345");
+            }
+            other => panic!("expected KsSourceState::KeyAbsent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_no_data_field_at_all() {
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            None,
+            Some("12345"),
+        );
+
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
+
+        assert!(
+            matches!(state, KsSourceState::KeyAbsent { ref resource_version } if resource_version == "12345"),
+            "expected KsSourceState::KeyAbsent with rv=12345, got {state:?}"
+        );
+    }
+
+    // ── build_anonymized_source_error_status (SEC-SECRET-NAME-DISCLOSURE) ────
+
+    #[test]
+    fn test_anonymized_status_uses_generic_message() {
+        let current = ScalewaySecretStatus::default();
+        let s = build_anonymized_source_error_status(&current);
+
+        assert_eq!(
+            s.error_message.as_deref(),
+            Some(STATUS_ERROR_GENERIC),
+            "error_message must be the static generic constant"
+        );
+        assert_eq!(s.sync_state, "Error");
+    }
+
+    #[test]
+    fn test_anonymized_status_preserves_unrelated_fields() {
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(42),
+            last_synced_resource_version: Some("12345".to_string()),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let s = build_anonymized_source_error_status(&current);
+
+        assert_eq!(s.scaleway_id, current.scaleway_id);
+        assert_eq!(s.current_version, current.current_version);
+        assert_eq!(
+            s.last_synced_resource_version,
+            current.last_synced_resource_version
+        );
+    }
+
+    #[test]
+    fn test_anonymized_status_never_leaks_secret_or_key_name() {
+        // Garantie de sécurité : peu importe l'identité du Secret ou de la clé,
+        // le status anonymisé ne contient JAMAIS leur nom. Verrouille l'invariant
+        // contre une régression qui f-stringerait le nom dans le message.
+        let current = ScalewaySecretStatus::default();
+        let s = build_anonymized_source_error_status(&current);
+        let msg = s.error_message.unwrap();
+
+        for sensitive in &[
+            "super-private-db-creds",
+            "stripe-api-token",
+            "passw0rd",
+            "client_secret",
+            "tls.key",
+        ] {
+            assert!(
+                !msg.contains(sensitive),
+                "status message leaked sensitive token '{sensitive}': {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_status_error_generic_is_truly_generic() {
+        // Sanity check : la constante elle-même ne contient ni placeholder
+        // ni nom de variable qui aurait été oublié dans un format!.
+        assert!(
+            !STATUS_ERROR_GENERIC.contains('{'),
+            "no format placeholder allowed: {STATUS_ERROR_GENERIC}"
+        );
+        assert!(
+            !STATUS_ERROR_GENERIC.contains('\''),
+            "single quotes typically wrap injected names: {STATUS_ERROR_GENERIC}"
+        );
+        assert!(!STATUS_ERROR_GENERIC.is_empty());
+    }
+
+    // ── build_revoked_status / opt-in revocation (issue #116) ───────────────
+
+    #[test]
+    fn test_status_revoked_generic_is_truly_generic() {
+        // Même verrou qu'au-dessus pour STATUS_ERROR_GENERIC : aucun
+        // placeholder de format!, aucune fuite probable de nom de Secret.
+        assert!(
+            !STATUS_REVOKED_GENERIC.contains('{'),
+            "no format placeholder allowed: {STATUS_REVOKED_GENERIC}"
+        );
+        assert!(
+            !STATUS_REVOKED_GENERIC.contains('\''),
+            "single quotes typically wrap injected names: {STATUS_REVOKED_GENERIC}"
+        );
+        assert!(!STATUS_REVOKED_GENERIC.is_empty());
+    }
+
+    #[test]
+    fn test_opt_in_revocation_message_does_not_leak_secret_name() {
+        // Garantie de sécurité (cohérent avec test_anonymized_status_never_leaks_secret_or_key_name) :
+        // peu importe le contexte du Secret K8s révoqué, le message poussé dans
+        // status.error_message ne contient JAMAIS de nom de Secret ou de clé.
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(7),
+            last_synced_resource_version: Some("12345".to_string()),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+        let msg = s
+            .error_message
+            .expect("revoked status must carry a message");
+
+        for sensitive in &[
+            "super-private-db-creds",
+            "stripe-api-token",
+            "passw0rd",
+            "client_secret",
+            "tls.key",
+            "sec-abc123", // scaleway_id ne doit pas non plus fuiter dans le message
+        ] {
+            assert!(
+                !msg.contains(sensitive),
+                "revoked status message leaked sensitive token '{sensitive}': {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_revoked_status_marks_state_and_preserves_traceability() {
+        // Le status Revoked DOIT garder scaleway_id + current_version (traçabilité
+        // + re-sync futur), poser sync_state="Revoked" et effacer
+        // last_synced_resource_version (sinon le prochain reconcile, label remis,
+        // déciderait AlreadySynced au lieu de PushNewVersion).
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(7),
+            last_synced_resource_version: Some("12345".to_string()),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+
+        assert_eq!(s.sync_state, "Revoked");
+        assert_eq!(
+            s.error_message.as_deref(),
+            Some(STATUS_REVOKED_GENERIC),
+            "error_message must be the static generic Revoked constant"
+        );
+        assert_eq!(
+            s.scaleway_id,
+            Some("sec-abc123".to_string()),
+            "scaleway_id must survive revocation (re-sync needs it)"
+        );
+        assert_eq!(
+            s.current_version,
+            Some(7),
+            "current_version must survive revocation (traçabilité)"
+        );
+        assert_eq!(
+            s.last_synced_resource_version, None,
+            "last_synced_resource_version must be cleared so a future re-sync pushes a new version"
+        );
+    }
+
+    #[test]
+    fn test_build_revoked_status_handles_missing_current_version() {
+        // Cas où le patch préliminaire #117 a posé scaleway_id mais
+        // create_secret_version n'a pas réussi : current_version = None.
+        // build_revoked_status doit gérer sans panic — la branche disable
+        // côté handle_opt_in_revocation se chargera de sauter l'appel API.
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-prelim".to_string()),
+            current_version: None,
+            last_synced_resource_version: None,
+            sync_state: "Syncing".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+
+        assert_eq!(s.sync_state, "Revoked");
+        assert_eq!(s.scaleway_id, Some("sec-prelim".to_string()));
+        assert_eq!(s.current_version, None);
+        assert_eq!(s.error_message.as_deref(), Some(STATUS_REVOKED_GENERIC));
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_opt_in_checked_before_key_extraction() {
+        // Garantie de sécurité : même si data contient la clé, l'opt-in absent
+        // doit empêcher l'extraction de payload (le payload ne doit JAMAIS être lu
+        // si l'opt-in n'est pas accordé).
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(None, None, Some(data), Some("12345"));
+
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        assert!(matches!(err, OperatorError::SecretOptInMissing(_)));
+    }
+
+    // ── is_cr_allowed_for_secret (annotation must bind to identity) ───────────
+
+    #[test]
+    fn test_is_cr_allowed_for_secret_matches_namespace_name() {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/db-sync".to_string(),
+        );
+        assert!(is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_no_annotation() {
+        assert!(!is_cr_allowed_for_secret(None, "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_annotation_absent() {
+        let mut a = BTreeMap::new();
+        a.insert("some.other/annotation".to_string(), "value".to_string());
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_wrong_cr_name() {
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/other-cr".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_wrong_namespace() {
+        // Si on ne comparait que le nom du CR, on ouvrirait un trou cross-namespace.
+        // Cette assertion verrouille la comparaison stricte ns + name.
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-b/db-sync".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_is_cr_allowed_extra_whitespace() {
+        // Match strict : pas de trim, pas de tolérance — un espace parasite est
+        // un refus. Évite les surprises où une copie/colle insèrerait un blanc.
+        let mut a = BTreeMap::new();
+        a.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            " team-a/db-sync ".to_string(),
+        );
+        assert!(!is_cr_allowed_for_secret(Some(&a), "team-a", "db-sync"));
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_opt_in_missing_when_cr_annotation_absent() {
+        // Label opt-in présent mais annotation `allowed-cr` absente :
+        // doit refuser la lecture (label-bypass via patch secrets sans annotation).
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(Some(labels), None, Some(data), Some("12345"));
+
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        let OperatorError::SecretOptInMissing(msg) = &err else {
+            panic!("expected SecretOptInMissing, got {err:?}");
+        };
+        assert!(
+            msg.contains(ALLOWED_CR_ANNOTATION),
+            "message should mention the annotation key: {msg}"
+        );
+        assert!(err.is_permanent_error());
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_returns_opt_in_missing_when_cr_annotation_mismatches() {
+        // Label opt-in présent, annotation présente mais pointe vers un autre CR :
+        // doit refuser (le Secret est lié à un autre ScalewaySecret).
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            ALLOWED_CR_ANNOTATION.to_string(),
+            "team-a/other-cr".to_string(),
+        );
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(Some(labels), Some(annotations), Some(data), Some("12345"));
+
+        let err =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap_err();
+        let OperatorError::SecretOptInMissing(msg) = &err else {
+            panic!("expected SecretOptInMissing, got {err:?}");
+        };
+        assert!(
+            msg.contains(ALLOWED_CR_ANNOTATION),
+            "message should mention the annotation key: {msg}"
+        );
+        assert!(err.is_permanent_error());
+    }
+
+    #[test]
+    fn test_parse_k8s_secret_source_success_requires_both_label_and_annotation() {
+        // Les deux conditions (label + annotation) sont présentes :
+        // le payload est extrait normalement.
+        let mut labels = BTreeMap::new();
+        labels.insert(OPT_IN_LABEL.to_string(), "true".to_string());
+        let mut data = BTreeMap::new();
+        data.insert(
+            "password".to_string(),
+            k8s_openapi::ByteString(b"s3cret".to_vec()),
+        );
+        let ks = k8s_secret(
+            Some(labels),
+            Some(allowed_cr_annotations()),
+            Some(data),
+            Some("12345"),
+        );
+
+        let state =
+            parse_k8s_secret_source(&ks, "db-pass", "password", "team-a", "db-sync").unwrap();
+
+        match state {
+            KsSourceState::Present { payload, .. } => {
+                assert_eq!(payload, b"s3cret".to_vec());
+            }
+            other => panic!("expected KsSourceState::Present, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_ks_key_not_found_returns_distinct_error() {
+        // K8s Secret présent (resource_version Some) mais clé absente de .data —
+        // distinct du cas "Secret absent" pour donner un message d'erreur clair.
+        let input = SecretReconcileInput {
+            current_key_present: false,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::ErrorKsKeyNotFound
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_no_scaleway_id_creates() {
+        let input = SecretReconcileInput {
+            scaleway_id: None,
+            last_synced_resource_version: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::CreateAndSyncSecret
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_source_changed_pushes_new_version() {
+        let input = SecretReconcileInput {
+            current_resource_version: Some("67890".to_string()),
+            ..base_secret_input()
+        };
+        match decide_next_action_secret(&input) {
+            SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+                assert_eq!(scaleway_id, "sec-abc123");
+            }
+            other => panic!("expected PushNewVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_with_scaleway_id_deletes() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::DeleteSecret
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_without_scaleway_id_removes_finalizer() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            scaleway_id: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::RemoveFinalizer
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_deletion_takes_priority_over_circuit_open() {
+        let input = SecretReconcileInput {
+            deletion_requested: true,
+            circuit_open: true,
+            ..base_secret_input()
+        };
+        // Suppression prioritaire sur circuit breaker
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::DeleteSecret
+        ));
     }
 }
