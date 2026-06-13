@@ -1322,6 +1322,12 @@ async fn validate_lb_spec(
 const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
 const ALLOWED_CR_ANNOTATION: &str = "scaleway.mathieubodin.io/allowed-cr";
 const STATUS_ERROR_GENERIC: &str = "Source Secret unavailable (see operator logs)";
+/// Message générique du status `Revoked` : informe l'utilisateur que la
+/// révocation a été appliquée côté Scaleway et indique le geste de
+/// remédiation. Ne contient AUCUN nom de Secret/clé (cohérent avec
+/// l'anonymisation SEC-002 : pas de fuite via `status.error_message`).
+const STATUS_REVOKED_GENERIC: &str =
+    "Source Secret opt-in revoked — Scaleway version disabled. Re-add label/annotation to re-sync.";
 
 /// État lu en UNE seule fois depuis le Secret K8s source.
 /// Évite la TOCTOU entre la vérification opt-in et la lecture de la valeur.
@@ -1452,6 +1458,89 @@ fn build_anonymized_source_error_status(
     status.error_message = Some(STATUS_ERROR_GENERIC.to_string());
     status.sync_state = "Error".to_string();
     status
+}
+
+/// Construit un status `Revoked` pour un Secret K8s précédemment synchronisé
+/// dont l'opt-in (label ou annotation `allowed-cr`) a été retiré par l'utilisateur.
+///
+/// Préserve `scaleway_id` et `current_version` (traçabilité + re-sync possible
+/// si l'utilisateur remet le label/annotation), efface
+/// `last_synced_resource_version` (la prochaine resync doit re-pousser une
+/// version), pose `sync_state = "Revoked"` et un `error_message` générique.
+/// Fonction pure pour test unitaire.
+fn build_revoked_status(current_status: &ScalewaySecretStatus) -> ScalewaySecretStatus {
+    let mut status = current_status.clone();
+    status.sync_state = "Revoked".to_string();
+    status.error_message = Some(STATUS_REVOKED_GENERIC.to_string());
+    // Reset du tracker de synchro : tout re-sync futur (label remis) doit
+    // pousser une nouvelle version, peu importe la resourceVersion courante.
+    status.last_synced_resource_version = None;
+    status
+}
+
+/// Désactive la version Scaleway courante et marque le status `Revoked`
+/// quand l'utilisateur retire le label/annotation opt-in d'un Secret K8s
+/// précédemment synchronisé.
+///
+/// Best-effort sur le call Scaleway (cohérent avec le pattern #114) : un
+/// échec est logué en `warn!`, le status est patché quand même pour signaler
+/// la révocation côté K8s. Si `current_version` est `None` (cas où le patch
+/// préliminaire #117 a posé `scaleway_id` mais `create_secret_version` n'a
+/// pas encore réussi), le disable est sauté — il n'y a rien à désactiver.
+async fn handle_opt_in_revocation(
+    ctx: &Arc<Context>,
+    secret_cr: &Arc<ScalewaySecret>,
+    api: &Api<ScalewaySecret>,
+    namespace: &str,
+    current_status: &ScalewaySecretStatus,
+    region: &str,
+    scaleway_id: &str,
+) {
+    tracing::warn!(
+        name = %secret_cr.name_any(),
+        namespace = %namespace,
+        scaleway_id = %scaleway_id,
+        "Opt-in label/annotation removed from previously synced Source Secret — revoking Scaleway version"
+    );
+
+    // Disable de la version courante (best-effort). Si aucune version n'a
+    // été créée (current_version=None) on saute proprement — pas de panic.
+    if let Some(revision) = current_status.current_version {
+        match get_namespace_client(ctx, namespace).await {
+            Ok(ns_client) => {
+                if let Err(e) = call_scaleway(ctx, || {
+                    ns_client.disable_secret_version(region, scaleway_id, revision)
+                })
+                .await
+                {
+                    tracing::warn!(
+                        name = %secret_cr.name_any(),
+                        scaleway_id = %scaleway_id,
+                        revision = revision,
+                        error = %e,
+                        "Failed to disable Scaleway secret version on opt-in revocation — best-effort, status will still be marked Revoked (see issue #116)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    name = %secret_cr.name_any(),
+                    scaleway_id = %scaleway_id,
+                    error = %e,
+                    "Could not build namespace client to disable Scaleway secret version — status will still be marked Revoked"
+                );
+            }
+        }
+    } else {
+        tracing::warn!(
+            name = %secret_cr.name_any(),
+            scaleway_id = %scaleway_id,
+            "No current_version recorded in status — skipping disable_secret_version (nothing to revoke on Scaleway)"
+        );
+    }
+
+    let status = build_revoked_status(current_status);
+    let _ = update_secret_status(secret_cr, api, status).await;
 }
 
 /// Met à jour le status avec un message générique (anonymise les noms de Secret/clé)
@@ -1616,6 +1705,26 @@ async fn reconcile_scaleway_secret_inner(
                     (None, false, None)
                 }
                 Err(e) => {
+                    // Révocation explicite : l'utilisateur retire le label/annotation
+                    // opt-in d'un Secret K8s précédemment synchronisé. On désactive
+                    // la version Scaleway (best-effort) et on marque le status
+                    // `Revoked` sans toucher les autres branches d'erreur, qui
+                    // continuent l'anonymisation SEC-002 via record_source_error_in_status.
+                    if matches!(&e, OperatorError::SecretOptInMissing(_)) {
+                        if let Some(sid) = current_status.scaleway_id.clone() {
+                            handle_opt_in_revocation(
+                                &ctx,
+                                &secret_cr,
+                                &api,
+                                &namespace,
+                                &current_status,
+                                &secret_cr.spec.region,
+                                &sid,
+                            )
+                            .await;
+                            return Err(e);
+                        }
+                    }
                     record_source_error_in_status(&secret_cr, &api, &current_status, &e).await;
                     return Err(e);
                 }
@@ -3252,6 +3361,113 @@ mod tests {
             "single quotes typically wrap injected names: {STATUS_ERROR_GENERIC}"
         );
         assert!(!STATUS_ERROR_GENERIC.is_empty());
+    }
+
+    // ── build_revoked_status / opt-in revocation (issue #116) ───────────────
+
+    #[test]
+    fn test_status_revoked_generic_is_truly_generic() {
+        // Même verrou qu'au-dessus pour STATUS_ERROR_GENERIC : aucun
+        // placeholder de format!, aucune fuite probable de nom de Secret.
+        assert!(
+            !STATUS_REVOKED_GENERIC.contains('{'),
+            "no format placeholder allowed: {STATUS_REVOKED_GENERIC}"
+        );
+        assert!(
+            !STATUS_REVOKED_GENERIC.contains('\''),
+            "single quotes typically wrap injected names: {STATUS_REVOKED_GENERIC}"
+        );
+        assert!(!STATUS_REVOKED_GENERIC.is_empty());
+    }
+
+    #[test]
+    fn test_opt_in_revocation_message_does_not_leak_secret_name() {
+        // Garantie de sécurité (cohérent avec test_anonymized_status_never_leaks_secret_or_key_name) :
+        // peu importe le contexte du Secret K8s révoqué, le message poussé dans
+        // status.error_message ne contient JAMAIS de nom de Secret ou de clé.
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(7),
+            last_synced_resource_version: Some("12345".to_string()),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+        let msg = s
+            .error_message
+            .expect("revoked status must carry a message");
+
+        for sensitive in &[
+            "super-private-db-creds",
+            "stripe-api-token",
+            "passw0rd",
+            "client_secret",
+            "tls.key",
+            "sec-abc123", // scaleway_id ne doit pas non plus fuiter dans le message
+        ] {
+            assert!(
+                !msg.contains(sensitive),
+                "revoked status message leaked sensitive token '{sensitive}': {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_revoked_status_marks_state_and_preserves_traceability() {
+        // Le status Revoked DOIT garder scaleway_id + current_version (traçabilité
+        // + re-sync futur), poser sync_state="Revoked" et effacer
+        // last_synced_resource_version (sinon le prochain reconcile, label remis,
+        // déciderait AlreadySynced au lieu de PushNewVersion).
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-abc123".to_string()),
+            current_version: Some(7),
+            last_synced_resource_version: Some("12345".to_string()),
+            sync_state: "Synced".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+
+        assert_eq!(s.sync_state, "Revoked");
+        assert_eq!(
+            s.error_message.as_deref(),
+            Some(STATUS_REVOKED_GENERIC),
+            "error_message must be the static generic Revoked constant"
+        );
+        assert_eq!(
+            s.scaleway_id,
+            Some("sec-abc123".to_string()),
+            "scaleway_id must survive revocation (re-sync needs it)"
+        );
+        assert_eq!(
+            s.current_version,
+            Some(7),
+            "current_version must survive revocation (traçabilité)"
+        );
+        assert_eq!(
+            s.last_synced_resource_version, None,
+            "last_synced_resource_version must be cleared so a future re-sync pushes a new version"
+        );
+    }
+
+    #[test]
+    fn test_build_revoked_status_handles_missing_current_version() {
+        // Cas où le patch préliminaire #117 a posé scaleway_id mais
+        // create_secret_version n'a pas réussi : current_version = None.
+        // build_revoked_status doit gérer sans panic — la branche disable
+        // côté handle_opt_in_revocation se chargera de sauter l'appel API.
+        let current = ScalewaySecretStatus {
+            scaleway_id: Some("sec-prelim".to_string()),
+            current_version: None,
+            last_synced_resource_version: None,
+            sync_state: "Syncing".to_string(),
+            error_message: None,
+        };
+        let s = build_revoked_status(&current);
+
+        assert_eq!(s.sync_state, "Revoked");
+        assert_eq!(s.scaleway_id, Some("sec-prelim".to_string()));
+        assert_eq!(s.current_version, None);
+        assert_eq!(s.error_message.as_deref(), Some(STATUS_REVOKED_GENERIC));
     }
 
     #[test]
