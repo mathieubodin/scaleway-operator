@@ -1,5 +1,9 @@
 # Scaleway Kubernetes Operator
 
+[![CI](https://github.com/mathieubodin/scaleway-operator/actions/workflows/pr.yml/badge.svg)](https://github.com/mathieubodin/scaleway-operator/actions)
+[![codecov](https://codecov.io/gh/mathieubodin/scaleway-operator/branch/main/graph/badge.svg)](https://codecov.io/gh/mathieubodin/scaleway-operator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Un opérateur Kubernetes moderne écrit en **Rust** pour gérer les ressources Scaleway directement depuis Kubernetes.
 
 ## 🚀 Fonctionnalités
@@ -13,26 +17,18 @@ Un opérateur Kubernetes moderne écrit en **Rust** pour gérer les ressources S
 - ✅ **Multi-zone et multi-région**
 - ✅ **Métriques Prometheus** (`/metrics`, `/healthz`, `/readyz`)
 
+### Ressources supportées
+
+L'opérateur réconcilie les Custom Resources suivantes :
+
+| Kind | Scope | Description |
+| --- | --- | --- |
+| `Instance` | Namespaced | Instance compute Scaleway (CRUD complet + synchronisation) |
+| `LoadBalancer` | Namespaced | Load Balancer Scaleway managé |
+| `ScalewaySecret` | Namespaced | Synchronisation d'un Secret Kubernetes vers Scaleway Secret Manager |
+| `NamespaceRole` | Cluster-wide | Lie un namespace Kubernetes à un rôle IAM Scaleway (prérequis par namespace) |
+
 ## 📋 Prérequis
-
-- Kubernetes 1.35+
-- Helm 3.8+ (support des registres OCI requis)
-- Token API Scaleway avec les permission sets IAM suivants :
-  - `InstancesFullAccess` (scope projet) — créer, lire, supprimer des instances
-  - `ProjectReadOnly` (scope organisation) — vérifier l'accès au projet cible
-
-## 🛠️ Installation
-
-Quatre étapes :
-
-1. Déploiement des CustomResourceDefinitions.
-2. Fournir les informations de connexion à l'API Scaleway pour l'opérateur.
-3. Déploiement de l'opérateur lui-même.
-4. Vérifier l'installation.
-
-Ces étapes nécessitent des droits cluster-admin (ou équivalent) sur le cluster cible.
-
-### Prérequis
 
 **Techniques :**
 
@@ -48,6 +44,17 @@ Vous aurez besoin de deux valeurs :
 - **Org UUID** : Console Scaleway → Organisation → Paramètres → Identifiant de l'organisation.
 
 Ces valeurs sont des UUIDs distincts — le token IAM n'est pas l'org UUID.
+
+## 🛠️ Installation
+
+Quatre étapes :
+
+1. Déploiement des CustomResourceDefinitions.
+2. Fournir les informations de connexion à l'API Scaleway pour l'opérateur.
+3. Déploiement de l'opérateur lui-même.
+4. Vérifier l'installation.
+
+Ces étapes nécessitent des droits cluster-admin (ou équivalent) sur le cluster cible.
 
 ### 1. Installer les CRDs
 
@@ -205,6 +212,37 @@ spec:
 
 ```bash
 kubectl apply -f instance.yaml
+```
+
+### Créer un Load Balancer
+
+```yaml
+apiVersion: scaleway.mathieubodin.io/v1
+kind: LoadBalancer
+metadata:
+  name: web-lb
+  namespace: production
+spec:
+  name: web-lb
+  zone: fr-par-1
+  lb_type: LB-S
+```
+
+### Synchroniser un Secret vers Scaleway Secret Manager
+
+```yaml
+apiVersion: scaleway.mathieubodin.io/v1
+kind: ScalewaySecret
+metadata:
+  name: db-sync
+  namespace: production
+spec:
+  name: db-password
+  region: fr-par
+  source:
+    kubernetes_secret:
+      name: db-password
+      key: password
 ```
 
 ### Vérifier le statut
@@ -502,6 +540,8 @@ Types valides :
               - Verify project access
 ```
 
+Pour la documentation détaillée de l'architecture interne (modules, flux de réconciliation par CRD, contrats), voir [CLAUDE.md](CLAUDE.md).
+
 ## 📝 Structure du code
 
 ```text
@@ -564,13 +604,13 @@ make check
 - [ ] Support des snapshots
 - [ ] Auto-scaling basé sur métriques
 
+## 🤝 Contribuer
+
+Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour le guide de contribution (setup local, tests, pipeline CI, conventions de PR).
+
 ## 📄 Licence
 
-MIT
-
-## 🤝 Contribution
-
-Les contributions sont bienvenues ! N'hésitez pas à ouvrir des issues ou PRs.
+MIT — voir [LICENSE](LICENSE).
 
 ## 📞 Support
 
