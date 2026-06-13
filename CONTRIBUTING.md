@@ -83,6 +83,10 @@ Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRole
 
 ### Pipeline CI
 
+Pour reproduire localement les vérifications CI, voir la section [Commandes de développement](#commandes-de-développement)
+(`make coverage-text`, `make coverage`, `make test-integration-kind`) et la section [Tests d'intégration](#tests-dintégration)
+pour le détail du déploiement kind utilisé par le job d'intégration.
+
 Deux workflows GitHub Actions s'exécutent automatiquement :
 
 | Workflow | Déclencheur | Jobs |
@@ -96,7 +100,15 @@ Le gate de merge repose sur trois required status checks :
 - `unit-tests` — tests unitaires + couverture générée
 - `codecov/patch` — patch coverage ≥ 80 % (activé après la première upload Codecov)
 
+**Glossaire :**
+
+- `coverage-lcov` / `coverage-kind-lcov` : cibles `make` qui génèrent un rapport de couverture au format LCOV (format standard consommé par Codecov) à partir des tests unitaires (rapide, sans cluster) ou des tests d'intégration (cluster kind éphémère).
+- **Patch coverage** : pourcentage de couverture des lignes **ajoutées ou modifiées** par la PR (delta), pas la couverture globale du dépôt. Une PR qui ajoute du code non testé fait baisser ce ratio même si la couverture totale reste élevée.
+
 #### Configurer Codecov pour un fork
+
+- **Contributeurs du repo principal (`mathieubodin/scaleway-operator`)** : aucune configuration nécessaire — le secret `CODECOV_TOKEN` est déjà configuré côté repository.
+- **Forks** : suivre les étapes ci-dessous pour activer l'upload Codecov depuis votre fork.
 
 Pour que l'upload de couverture fonctionne depuis un fork :
 
@@ -104,6 +116,18 @@ Pour que l'upload de couverture fonctionne depuis un fork :
 2. Ajouter le secret `CODECOV_TOKEN` dans les Settings du fork : **Settings → Secrets and variables → Actions**.
 
 Sans ce secret, `pr.yml` passe quand même (les tests tournent) mais l'upload Codecov échoue silencieusement et le check `codecov/patch` n'apparaît pas.
+
+#### Déboguer un échec du patch coverage
+
+- **Cause 1 — patch coverage < 80 %** : du code a été ajouté sans test associé.
+  Solution : ajouter des tests sur les lignes nouvellement ajoutées, puis vérifier localement avec `make coverage-text`
+  (résumé terminal) ou `make coverage` (rapport HTML pour identifier les lignes non couvertes).
+- **Cause 2 — secret `CODECOV_TOKEN` absent** : typique d'un fork sans configuration Codecov.
+  Le check `codecov/patch` n'est jamais publié.
+  Solution : voir la sous-section [Configurer Codecov pour un fork](#configurer-codecov-pour-un-fork) ci-dessus.
+- **Cause 3 — check `codecov/patch` "pending" plus de 5 min** : l'upload Codecov a échoué ou n'a pas démarré.
+  Solution : ouvrir les logs du job `unit-tests` dans GitHub Actions et vérifier que l'étape d'upload Codecov
+  s'est terminée avec succès (token valide, fichier `lcov.info` non vide).
 
 ### Déploiement sur un cluster réel
 
