@@ -1806,13 +1806,27 @@ async fn reconcile_scaleway_secret_inner(
                 "decide_next_action_secret guarantees key_present and current_resource_version",
             );
 
-            let revision = call_scaleway(&ctx, || {
+            // Si create_secret_version échoue après le patch préliminaire "Syncing",
+            // il faut transitionner le status vers "Error" sinon le CR reste en
+            // "Syncing" indéfiniment (le prochain reconcile entrerait par PushNewVersion
+            // et n'effacerait pas cet état tant que le Secret K8s source reste lisible).
+            // Revue Opus correctness — finding observabilité de l'issue #117.
+            let revision = match call_scaleway(&ctx, || {
                 ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
             })
             .await
-            .inspect_err(|_| {
-                measurer.set_outcome(ReconcileOutcome::Error);
-            })?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let mut err_status = current_status.clone();
+                    err_status.scaleway_id = Some(scaleway_id.clone());
+                    err_status.sync_state = "Error".to_string();
+                    err_status.error_message = Some(e.for_status());
+                    let _ = update_secret_status(&secret_cr, &api, err_status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
 
             let mut status = current_status;
             status.scaleway_id = Some(scaleway_id);
