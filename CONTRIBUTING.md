@@ -194,35 +194,23 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 Le [Project GitHub](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
 Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
 
-### Configurer le secret `GH_PROJECT_TOKEN`
+### Automatisations du Project
 
-Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `parse-cost-comment`) requièrent un fine-grained PAT stocké comme secret `GH_PROJECT_TOKEN`.
+Le suivi du board repose sur les automatisations natives du Project GitHub, réglées dans son interface web
+(menu « Workflows »). Aucun workflow Actions ni token personnel n'intervient.
 
-**1. Créer le PAT** — les fine-grained PATs ne supportent pas encore les projets personnels (user-owned). Utiliser un **classic PAT** : [github.com/settings/tokens/new](https://github.com/settings/tokens/new) :
-
-| Champ | Valeur |
+| Automatisation native | Effet |
 | --- | --- |
-| Note | `scaleway-operator-project` |
-| Expiration | No expiration (recommandé pour un token de CI solo) |
-| Scopes | `project` (Full control of projects) |
+| Auto-add to project | toute nouvelle issue du dépôt rejoint le board |
+| Item added to project | Status « Backlog » |
+| Pull request linked to issue | Status « Review » dès qu'une PR référence l'issue avec `Closes #N` |
+| Item closed | Status « Done », à la fermeture de l'issue par le merge de la PR |
 
-**2. Ajouter le secret** — [Settings → Secrets → Actions → New](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions/new) :
+Ne jamais passer une issue ouverte en « Done » à la main : l'automatisation « Auto-close issue » la fermerait.
+Si une PR est liée à son issue après son ouverture et que le Status ne bouge pas, lier l'issue depuis la section
+« Development » de la PR.
 
-| Champ | Valeur |
-| --- | --- |
-| Name | `GH_PROJECT_TOKEN` |
-| Secret | valeur du PAT généré |
-
-**Comportement selon l'état du secret :**
-
-| État | Comportement |
-| --- | --- |
-| Secret absent | Warning silencieux, workflow skippé — aucun check ne bloque |
-| Token expiré ou invalide | Erreur visible + check en échec — GitHub notifie le mainteneur |
-
-**Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `GH_PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
-
-**Usage local (terminal ou Claude Code)** : le token `gh` du mainteneur suffit pour tout, issues, PRs et board compris.
+**Accès depuis le shell** : le token `gh` du mainteneur suffit pour tout, issues, PRs et board compris.
 Il doit porter les scopes `repo`, `read:org` et `project` :
 
 ```bash
@@ -271,7 +259,7 @@ du commit remplacé est perdu (sous-comptage). Pendant une session, préférer `
 
 ### Project Field IDs
 
-Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de préparation de milestone pour filtrer les issues via GraphQL.
+Ces IDs servent aux opérations lancées depuis le shell et aux sessions de préparation de milestone.
 
 | Champ | Field ID | Options disponibles |
 | --- | --- | --- |
@@ -279,6 +267,7 @@ Ces IDs sont utilisés dans les workflows GitHub Actions et les sessions de pré
 | Axis | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_28` | `2b5337ce` Couverture API Scaleway · `2de5cc1d` Fiabilité de l'opérateur · `7682f8cd` Extensibilité · `ad58ffc2` Mise en place et documentation · `baa066a1` Outillage IA agentique |
 | Priority | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3A` | `43a64d76` P0 · `1ba4b43d` P1 · `774f2cde` P2 · `7e16a61a` P3 |
 | Effort | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3E` | `866f0c5e` S · `6a811477` M · `55fdce43` L · `d4427b50` XL |
+| Tokens | `PVTF_lAHOAAJUjc4BYpzhzhT6_3I` | champ numérique, renseigné depuis le shell en fin de PR |
 | Milestone | `PVTF_lAHOAAJUjc4BYpzhzhTuEow` | champ natif GitHub — auto-propagé à l'assignation d'une issue à un milestone |
 
 **PROJECT_ID** : `PVT_kwHOAAJUjc4BYpzh`
@@ -289,8 +278,8 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 #### Déclenchement
 
-- **À partir du 2e milestone** : le workflow `on-milestone-closed.yml` crée automatiquement une issue `chore: préparer milestone M<N>` à la fermeture du milestone précédent.
-- **Bootstrap M1** : sans milestone précédent, ouvrir une session Claude Code et demander explicitement `prépare le milestone M1`.
+La préparation se lance par une demande explicite à l'agent, après la clôture du milestone précédent :
+`prépare le milestone M<N>`. Aucun workflow ne la déclenche.
 
 #### Convention de nommage
 
@@ -359,7 +348,7 @@ done
 1. **Fork** le dépôt
 2. **Créez une branche** (`git checkout -b feat/ma-fonctionnalite`)
 3. **Committez** en conventional commits (`feat(scope): description`)
-4. **Référencez l'issue** dans le corps de la PR avec `Closes #N` (met à jour le Status automatiquement)
+4. **Référencez l'issue** dans le corps de la PR avec `Closes #N` : le modèle de PR propose la ligne, et le Status du board suit
 5. **Poussez** votre branche et **ouvrez une PR** avec une description claire
 
 **Checklist avant de soumettre :**
@@ -372,15 +361,19 @@ done
 
 ### Convention `/cost N`
 
-Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implémenter :
+Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, depuis le shell.
+En fin de PR, l'agent renseigne ce champ pour chaque issue liée par `Closes #N`. La dernière valeur l'emporte.
 
-```text
-/cost 12500
+```bash
+# ITEM_ID : identifiant de l'issue sur le board
+ITEM_ID=$(gh project item-list 2 --owner mathieubodin --limit 300 --format json \
+  --jq '.items[] | select(.content.number == 42) | .id')
+
+gh project item-edit --project-id PVT_kwHOAAJUjc4BYpzh --id "$ITEM_ID" \
+  --field-id PVTF_lAHOAAJUjc4BYpzhzhT6_3I --number 12500
 ```
 
-Le chiffre doit être un entier sans séparateur de milliers, en début de ligne.
-Ce commentaire met à jour automatiquement le champ **Tokens** du Project GitHub pour chaque issue liée via `Closes/Fixes/Resolves`.
-Si vous commentez plusieurs fois, le dernier `/cost` prévaut.
+Le mainteneur peut demander la même chose à l'agent en écrivant `/cost 12500` dans la session.
 
 ## Style de code
 

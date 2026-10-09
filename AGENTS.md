@@ -39,5 +39,9 @@ Board : <https://github.com/users/mathieubodin/projects/2>
 - À la création d'une issue, renseigner Axis, Priority, Effort et Status. Valeurs et IDs :
   CONTRIBUTING.md, section Project Field IDs.
 - Toute feature : une issue parent plus une sous-issue par unité d'implémentation (U1…Un).
-- Toute PR référence son issue avec `Closes #N`, ce qui met à jour le Status du board.
+- Toute PR référence son issue avec `Closes #N`. Les automatisations natives du Project font suivre
+  le Status : « Review » à la liaison, « Done » à la fermeture. Ne jamais passer une issue ouverte en « Done » à la main.
+- En fin de PR, renseigner le champ `Tokens` de chaque issue liée. Détail : CONTRIBUTING.md, section Convention `/cost N`.
+- Après chaque merge `feat` ou `fix` sur `main`, proposer une release : `make release-prepare`, merge de la PR
+  de release, puis `make release-publish`. Détail : CONTRIBUTING.md, section Publier une release.
 - Milestone : l'agent propose la composition, le mainteneur valide avant création.
