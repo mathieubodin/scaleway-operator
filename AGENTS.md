@@ -30,12 +30,12 @@ qui réconcilie des Custom Resources avec l'API Scaleway. Docs et commentaires e
 - Problèmes déjà résolus, classés par catégorie avec frontmatter YAML : `docs/solutions/`
 - Installation et usage de l'opérateur : [README.md](README.md)
 
-## GitHub Project v2
+## Project GitHub
 
 Board : <https://github.com/users/mathieubodin/projects/2>
 
-- Lecture et mutations du board : préfixer `GH_TOKEN=$GH_PROJECT_TOKEN`, le token `gh` local n'a pas
-  le scope `project`. Les autres commandes `gh` utilisent l'authentification locale.
+- Tout accès à GitHub passe par l'authentification `gh` locale, avec les scopes `repo`, `read:org`
+  et `project`. Aucun token personnel n'est stocké dans le dépôt.
 - À la création d'une issue, renseigner Axis, Priority, Effort et Status. Valeurs et IDs :
   CONTRIBUTING.md, section Project Field IDs.
 - Toute feature : une issue parent plus une sous-issue par unité d'implémentation (U1…Un).

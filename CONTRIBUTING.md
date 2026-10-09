@@ -81,6 +81,54 @@ Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRole
 | `scw-test-viewer` | UUID valide | Viewer | oui | Rôle lecture seule |
 | `scw-test-editor` | UUID valide | Editor | oui | Happy path : finalizer, suppression, création, sync, adoption, erreurs (plusieurs tests) |
 
+### Pipeline CI
+
+Pour reproduire localement les vérifications CI, voir la section [Commandes de développement](#commandes-de-développement)
+(`make coverage-text`, `make coverage`, `make test-integration-kind`) et la section [Tests d'intégration](#tests-dintégration)
+pour le détail du déploiement kind utilisé par le job d'intégration.
+
+Deux workflows GitHub Actions s'exécutent automatiquement :
+
+| Workflow | Déclencheur | Jobs |
+| --- | --- | --- |
+| `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
+| `release.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+
+Le gate de merge repose sur trois required status checks :
+
+- `lint` — `make check` doit passer (cargo fmt + clippy + markdownlint)
+- `unit-tests` — tests unitaires + couverture générée
+- `codecov/patch` — patch coverage ≥ 80 % (activé après la première upload Codecov)
+
+**Glossaire :**
+
+- `coverage-lcov` / `coverage-kind-lcov` : cibles `make` qui génèrent un rapport de couverture au format LCOV (format standard consommé par Codecov) à partir des tests unitaires (rapide, sans cluster) ou des tests d'intégration (cluster kind éphémère).
+- **Patch coverage** : pourcentage de couverture des lignes **ajoutées ou modifiées** par la PR (delta), pas la couverture globale du dépôt. Une PR qui ajoute du code non testé fait baisser ce ratio même si la couverture totale reste élevée.
+
+#### Configurer Codecov pour un fork
+
+- **Contributeurs du repo principal (`mathieubodin/scaleway-operator`)** : aucune configuration nécessaire — le secret `CODECOV_TOKEN` est déjà configuré côté repository.
+- **Forks** : suivre les étapes ci-dessous pour activer l'upload Codecov depuis votre fork.
+
+Pour que l'upload de couverture fonctionne depuis un fork :
+
+1. Connecter le fork sur [codecov.io](https://codecov.io) et récupérer le Repository Token.
+2. Ajouter le secret `CODECOV_TOKEN` dans les Settings du fork : **Settings → Secrets and variables → Actions**.
+
+Sans ce secret, `pr.yml` passe quand même (les tests tournent) mais l'upload Codecov échoue silencieusement et le check `codecov/patch` n'apparaît pas.
+
+#### Déboguer un échec du patch coverage
+
+- **Cause 1 — patch coverage < 80 %** : du code a été ajouté sans test associé.
+  Solution : ajouter des tests sur les lignes nouvellement ajoutées, puis vérifier localement avec `make coverage-text`
+  (résumé terminal) ou `make coverage` (rapport HTML pour identifier les lignes non couvertes).
+- **Cause 2 — secret `CODECOV_TOKEN` absent** : typique d'un fork sans configuration Codecov.
+  Le check `codecov/patch` n'est jamais publié.
+  Solution : voir la sous-section [Configurer Codecov pour un fork](#configurer-codecov-pour-un-fork) ci-dessus.
+- **Cause 3 — check `codecov/patch` "pending" plus de 5 min** : l'upload Codecov a échoué ou n'a pas démarré.
+  Solution : ouvrir les logs du job `unit-tests` dans GitHub Actions et vérifier que l'étape d'upload Codecov
+  s'est terminée avec succès (token valide, fichier `lcov.info` non vide).
+
 ### Déploiement sur un cluster réel
 
 #### Kubeconfig
@@ -114,7 +162,7 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 
 ## Roadmap
 
-Le [Project v2](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
+Le [Project GitHub](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
 Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
 
 ### Configurer le secret `GH_PROJECT_TOKEN`
@@ -145,12 +193,12 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 
 **Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `GH_PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
 
-**Usage local (terminal ou Claude Code)** : le token `gh` du mainteneur (`gh auth login`, scopes `repo`, `read:org`) suffit
-pour les issues, PRs et commentaires, mais n'a pas le scope `project`. Toute lecture ou mutation GraphQL du board doit donc
-être préfixée explicitement avec le même PAT, exporté localement (par exemple via `direnv` et un `.envrc` non versionné) :
+**Usage local (terminal ou Claude Code)** : le token `gh` du mainteneur suffit pour tout, issues, PRs et board compris.
+Il doit porter les scopes `repo`, `read:org` et `project` :
 
 ```bash
-GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
+gh auth refresh -s project
+gh auth status
 ```
 
 ### Token tracking git
@@ -221,7 +269,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 #### Instructions de session pour l'agent (F2)
 
-1. **Lire le Backlog** depuis Project v2 via GraphQL (`PVT_kwHOAAJUjc4BYpzh`) :
+1. **Lire le Backlog** depuis le Project GitHub via GraphQL (`PVT_kwHOAAJUjc4BYpzh`) :
    issues avec `Status = Backlog` (`f75ad846`) non assignées à un milestone ouvert.
    Par défaut : proposer uniquement P0 (`43a64d76`) et P1 (`1ba4b43d`).
 2. **Récupérer les sous-issues** : `GET /repos/mathieubodin/scaleway-operator/issues/{n}/sub_issues`
@@ -239,7 +287,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 >
 > **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
 >
-> **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
+> **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue du Project GitHub dans l'interface web.
 
 ## Proposer une fonctionnalité
 
@@ -288,8 +336,8 @@ done
 **Checklist avant de soumettre :**
 
 - [ ] `make check` passe sans warnings
-- [ ] `make coverage-text` passe
-- [ ] `make test-integration-kind` passe
+- [ ] `make coverage-text` passe (tests unitaires)
+- [ ] `make coverage-lcov` produit `target/llvm-cov/lcov.info` non vide
 - [ ] `make generate-crds` relancé si `src/resources.rs` modifié
 - [ ] Documentation à jour
 
@@ -302,7 +350,7 @@ Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implé
 ```
 
 Le chiffre doit être un entier sans séparateur de milliers, en début de ligne.
-Ce commentaire met à jour automatiquement le champ **Tokens** du Project v2 pour chaque issue liée via `Closes/Fixes/Resolves`.
+Ce commentaire met à jour automatiquement le champ **Tokens** du Project GitHub pour chaque issue liée via `Closes/Fixes/Resolves`.
 Si vous commentez plusieurs fois, le dernier `/cost` prévaut.
 
 ## Style de code
