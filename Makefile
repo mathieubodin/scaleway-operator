@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind
+.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind release-prepare release-publish
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -97,6 +97,24 @@ check-markdownlint:
 		exit 1; \
 	}
 
+check-gh:
+	@command -v gh >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: gh not found. Install with:"; \
+		echo "  https://cli.github.com/"; \
+		echo ""; \
+		exit 1; \
+	}
+
+check-npx:
+	@command -v npx >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: npx not found. Install Node.js:"; \
+		echo "  https://nodejs.org/"; \
+		echo ""; \
+		exit 1; \
+	}
+
 env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-kind check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
@@ -110,6 +128,12 @@ test: check-cargo
 
 test-integration-kind: check-cargo check-kind check-docker check-helm ## Lance les tests d'integration via un cluster kind éphémère (necessite Docker)
 	bash scripts/test-integration-kind.sh
+
+release-prepare: check-gh check-npx ## Ouvre ou met à jour la PR de release et y synchronise les versions du README
+	bash scripts/release-prepare.sh
+
+release-publish: check-gh check-npx ## Crée tags et releases de la PR de release mergée, si les tests d'intégration sont verts
+	bash scripts/release-publish.sh
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	mkdir -p $(COVERAGE_DIR)
