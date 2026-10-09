@@ -44,7 +44,7 @@ impl ScalewayClient {
             }
         });
 
-        let url = format!("{}/instance/v1/zones/{}/servers", self.base_url, &spec.zone);
+        let url = format!("{}/instance/v1/zones/{}/servers", self.base_url, spec.zone);
 
         let response = self
             .http_client
@@ -347,7 +347,7 @@ impl ScalewayClient {
             "tags": tags,
         });
 
-        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, &spec.zone);
+        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, spec.zone);
 
         let response = self
             .http_client
