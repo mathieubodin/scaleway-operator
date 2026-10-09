@@ -7,8 +7,8 @@ Ce document est le point d'entrée pour contribuer à l'opérateur : il décrit 
 ```text
 main.rs          — Point d'entrée : initialise le Context, lance le Controller kube-rs et le serveur axum
 context.rs       — Struct Context partagé entre tous les réconciliateurs (client k8s, client Scaleway, métriques, backoff)
-resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, NamespaceRole
-reconcilers.rs   — Logique de réconciliation pour Instance ; error_policy commune
+resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, LoadBalancer, ScalewaySecret, NamespaceRole
+reconcilers.rs   — Logique de réconciliation pour Instance, LoadBalancer et ScalewaySecret ; error_policy commune
 scaleway.rs      — ScalewayClient : wrappeur reqwest sur l'API REST Scaleway
 error.rs         — OperatorError enum (10 variants actives + FinalizationError réservé) + sanitization pour le status CRD
 metrics.rs       — Compteurs et histogrammes Prometheus + ReconcileMeasurer (RAII timer)
@@ -37,14 +37,85 @@ Les étapes dans `reconcile_instance_inner` :
 `set_outcome(...)` est appelé avant chaque retour. Le Drop enregistre durée + outcome dans Prometheus. Ne pas
 oublier le `set_outcome` — le measurer log un warn et enregistre `Error` par défaut.
 
+## Flux de réconciliation — LoadBalancer
+
+Même enchaînement que pour `Instance`, adapté aux LB Scaleway :
+
+```text
+1. deletion_timestamp ?  → DELETE LB Scaleway + retrait du finalizer scaleway.mathieubodin.io/loadbalancer-finalizer
+2. get NamespaceRole     → ConfigError (permanent) si absent
+3. get project-id        → ConfigError (permanent) si annotation absente ou UUID invalide
+4. ajouter finalizer     → requeue
+5. valider zone + type   → InvalidZone / InvalidLbType (permanent), listes statiques dans scaleway.rs
+6. vérifier accès projet → ProjectAccessDenied (permanent)
+7. créer le LB           → si status.scaleway_id est absent
+8. synchroniser état     → le LB transite par `pending` avant `ready`
+9. requeue périodique    → suivi de la convergence et des dérives
+```
+
+## Flux de réconciliation — ScalewaySecret
+
+`ScalewaySecret` pousse la valeur d'une clé d'un Secret Kubernetes vers Scaleway Secret Manager.
+Il n'a pas de zone mais une région, et sa source vit dans le cluster.
+
+```text
+1. valider spec.region   → ConfigError (permanent), suppression comprise : la région part dans le chemin des URLs
+2. get NamespaceRole     → hors suppression ; ConfigError (permanent) si absent ou en lecture seule
+3. lire le Secret source → un seul `get`, qui vérifie l'opt-in et fournit la valeur
+                           SecretOptInMissing / SecretKeyNotFound (permanent), SecretNotFound (transitoire)
+4. opt-in retiré ?       → désactive la version Scaleway courante, puis status `Revoked`
+5. deletion_timestamp ?  → DELETE du secret Scaleway + retrait du finalizer scaleway.mathieubodin.io/secret-finalizer
+6. ajouter finalizer     → requeue 5s
+7. créer ou adopter      → recherche par tags opérateur (namespace et nom du CR), création sinon, puis première version
+8. rotation              → nouvelle version si le resourceVersion du Secret source a changé,
+                           puis désactivation best-effort de la version précédente
+9. requeue 30s           → détection de la prochaine rotation
+```
+
+Le `status` ne contient jamais de dérivé de la valeur : la rotation est détectée par le `metadata.resourceVersion`
+du Secret source. Le compromis est documenté dans
+[`docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md`](docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md).
+
+### Opt-in du Secret source
+
+L'opérateur ne lit un Secret Kubernetes que s'il porte les deux marqueurs suivants :
+
+- le label `scaleway.mathieubodin.io/allow-operator-read: "true"`, chaîne exacte ;
+- l'annotation `scaleway.mathieubodin.io/allowed-cr: "<namespace>/<nom du CR>"`, strictement égale au CR qui le référence.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-password
+  namespace: team-a
+  labels:
+    scaleway.mathieubodin.io/allow-operator-read: "true"
+  annotations:
+    scaleway.mathieubodin.io/allowed-cr: "team-a/db-sync"
+```
+
+L'annotation empêche un autre CR du namespace de réutiliser un Secret déjà labellisé.
+Le droit de lecture vient d'un Role `get secrets` par namespace, créé par `namespace-bootstrap.yaml` :
+le ClusterRole de l'opérateur ne donne aucun accès aux Secrets.
+
+## Prérequis par namespace
+
+Chaque namespace qui héberge des ressources de l'opérateur doit avoir :
+
+- l'annotation `scaleway.mathieubodin.io/project-id` sur le namespace ;
+- une ressource `NamespaceRole` cluster-wide dont le nom est exactement celui du namespace ;
+- un Secret `scaleway-ns-creds-{namespace}` dans le namespace `scaleway-system`, qui porte les credentials
+  Scaleway utilisés pour ce namespace.
+
 ## Gestion des erreurs
 
 `OperatorError` distingue deux catégories, traitées différemment dans `error_policy` :
 
 |Catégorie|Variants|Comportement|
 |---|---|---|
-|**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `ProjectAccessDenied`|`Action::await_change()` — pas de retry, attend une modification du CR|
-|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
+|**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `InvalidLbType`, `ProjectAccessDenied`, `SecretSourceNotConfigured`, `SecretOptInMissing`, `SecretKeyNotFound`|`Action::await_change()` — pas de retry, attend une modification du CR|
+|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
 
 **Règle :** une erreur est permanente si et seulement si un retry immédiat ne peut pas la résoudre — c'est-à-dire si elle nécessite une action de l'utilisateur (corriger le spec, créer une ressource manquante).
 
