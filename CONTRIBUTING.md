@@ -87,12 +87,13 @@ Pour reproduire localement les vérifications CI, voir la section [Commandes de 
 (`make coverage-text`, `make coverage`, `make test-integration-kind`) et la section [Tests d'intégration](#tests-dintégration)
 pour le détail du déploiement kind utilisé par le job d'intégration.
 
-Deux workflows GitHub Actions s'exécutent automatiquement :
+Trois workflows GitHub Actions s'exécutent automatiquement :
 
 | Workflow | Déclencheur | Jobs |
 | --- | --- | --- |
 | `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
-| `release.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `integration.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `release.yml` | Release publiée | `image` (tags `scaleway-operator-v*`), `chart` (tags `scaleway-operator-chart-v*` et `scaleway-operator-crds-v*`) |
 
 Le gate de merge repose sur trois required status checks :
 
@@ -128,6 +129,34 @@ Sans ce secret, `pr.yml` passe quand même (les tests tournent) mais l'upload Co
 - **Cause 3 — check `codecov/patch` "pending" plus de 5 min** : l'upload Codecov a échoué ou n'a pas démarré.
   Solution : ouvrir les logs du job `unit-tests` dans GitHub Actions et vérifier que l'étape d'upload Codecov
   s'est terminée avec succès (token valide, fichier `lcov.info` non vide).
+
+### Publier une release
+
+Une release se prépare et se publie depuis le shell, avec l'authentification `gh` locale (scope `repo`).
+Une PR ou une release créée avec ce token déclenche les workflows, ce que ne fait pas le token standard des Actions.
+Aucun token personnel n'est stocké dans le dépôt.
+
+L'ordre est toujours le même :
+
+1. `make release-prepare` ouvre ou met à jour la PR de release avec release-please, puis y réapplique
+   les versions de chart du README. La PR reçoit les checks `lint` et `unit-tests`.
+2. Merger la PR de release. Le workflow `integration.yml` s'exécute sur le commit de merge.
+3. `make release-publish` vérifie que ces tests d'intégration sont verts, puis crée les tags et les releases.
+   Chaque release publiée déclenche `release.yml`, qui construit l'image ou pousse le chart selon le préfixe du tag.
+
+Points d'attention :
+
+- Ne jamais lancer release-please autrement que par `make release-prepare` : il régénère sa branche
+  et écraserait le commit du README.
+- `make release-prepare` refuse de démarrer tant qu'une PR de release mergée n'est pas publiée.
+- Si la publication échoue alors que la release existe déjà, relancer le workflow `release.yml` sur cette release.
+- La version de la CLI release-please est épinglée dans `scripts/release-common.sh`.
+
+| Composant | Préfixe de tag |
+| --- | --- |
+| Binaire et image | `scaleway-operator-v` |
+| Chart `scaleway-operator` | `scaleway-operator-chart-v` |
+| Chart `scaleway-operator-crds` | `scaleway-operator-crds-v` |
 
 ### Déploiement sur un cluster réel
 
