@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.13...scaleway-operator-v0.1.14) (2026-10-09)
+
+
+### Features
+
+* **ci-coverage:** add .codecov.yml — patch gate 80%, unit/integration flags ([32a2d55](https://github.com/mathieubodin/scaleway-operator/commit/32a2d55e37bf83670fe9d423076a34ef0c9419a0)), refs [#97](https://github.com/mathieubodin/scaleway-operator/issues/97)
+* **ci-coverage:** add coverage-lcov and coverage-kind-lcov Makefile targets ([3df4e32](https://github.com/mathieubodin/scaleway-operator/commit/3df4e320a9f79f546f57a3e2c356ecc399a401ff)), refs [#96](https://github.com/mathieubodin/scaleway-operator/issues/96)
+* **ci-coverage:** add pr.yml — lint + unit tests + Codecov patch gate ([908822b](https://github.com/mathieubodin/scaleway-operator/commit/908822b026dc784aa5a9bff8502defb5ca82e7c5)), refs [#98](https://github.com/mathieubodin/scaleway-operator/issues/98)
+* **ci-coverage:** upgrade release.yml integration-tests to full coverage upload ([22422d0](https://github.com/mathieubodin/scaleway-operator/commit/22422d0872025598b2dfdb8da4d46d6ffeae5628)), refs [#99](https://github.com/mathieubodin/scaleway-operator/issues/99)
+* **milestone-1:** CI coverage gate + ScalewaySecret CRD reconciler ([297616c](https://github.com/mathieubodin/scaleway-operator/commit/297616c53d75f2bc732b9e3e17f248ce75f6dc70))
+* **scaleway-secret:** U1 — CRD types ScalewaySecretSpec/Status/SecretSource ([476e0a1](https://github.com/mathieubodin/scaleway-operator/commit/476e0a14d89fcadd2b393ccef63e57e1ceed3087)), refs [#59](https://github.com/mathieubodin/scaleway-operator/issues/59)
+* **scaleway-secret:** U2 — error variants SecretNotFound/SecretSourceNotConfigured ([b8e096f](https://github.com/mathieubodin/scaleway-operator/commit/b8e096ff091dd2448e1f40322eb6ba3fe5801455)), refs [#60](https://github.com/mathieubodin/scaleway-operator/issues/60)
+* **scaleway-secret:** U3 — Scaleway Secret Manager client methods ([036a824](https://github.com/mathieubodin/scaleway-operator/commit/036a8246231f55f7e50db7b6f1e13ac7dfbf4abd)), refs [#61](https://github.com/mathieubodin/scaleway-operator/issues/61)
+* **scaleway-secret:** U4 — ScalewaySecret reconciler (pure layer + I/O) ([adafcd5](https://github.com/mathieubodin/scaleway-operator/commit/adafcd5eb0672d6652082429a8f00e15718f4160)), refs [#62](https://github.com/mathieubodin/scaleway-operator/issues/62)
+* **scaleway-secret:** U5 — register ScalewaySecret controller in main.rs ([84f6e5e](https://github.com/mathieubodin/scaleway-operator/commit/84f6e5ea67e495d47c736acbbffbbd9fc6260c7a)), refs [#63](https://github.com/mathieubodin/scaleway-operator/issues/63)
+* **scaleway-secret:** U6 — CRD manifests + Helm chart for ScalewaySecret ([2b179db](https://github.com/mathieubodin/scaleway-operator/commit/2b179db8c0578136b8532b06f7f56ba0ceed1fb7)), refs [#64](https://github.com/mathieubodin/scaleway-operator/issues/64)
+
+
+### Bug Fixes
+
+* **chart:** keep the ScalewaySecret CRD on uninstall and align finalizer name in docs ([02a0197](https://github.com/mathieubodin/scaleway-operator/commit/02a01974bc181fe4898631f35bd1c67b6886c7a8))
+* **ci-coverage:** address code review findings from CI gate implementation ([9526662](https://github.com/mathieubodin/scaleway-operator/commit/9526662283e09d7433d4f64d50203c9aef568a07))
+* **scaleway-secret:** COR-01 + COR-04 + tests d'erreur Secret Manager ([ce7c1d3](https://github.com/mathieubodin/scaleway-operator/commit/ce7c1d34821bedf19906ce732f83a1e2ae787a5a))
+* **scaleway-secret:** lier l'opt-in à l'identité du CR (closes [#115](https://github.com/mathieubodin/scaleway-operator/issues/115)) ([6f5107c](https://github.com/mathieubodin/scaleway-operator/commit/6f5107c196dc283a9202afd2392fbf8535d18925))
+* **scaleway-secret:** rendre disable_secret_version best-effort (closes [#114](https://github.com/mathieubodin/scaleway-operator/issues/114)) ([1fae1e9](https://github.com/mathieubodin/scaleway-operator/commit/1fae1e932226a541130e35ddb581379da35037be))
+* **scaleway-secret:** reserve-intent status préliminaire dans CreateAndSync (closes [#117](https://github.com/mathieubodin/scaleway-operator/issues/117)) ([8ba62cb](https://github.com/mathieubodin/scaleway-operator/commit/8ba62cbc86df4b395e5a71758ba2fb7c250724d2))
+* **scaleway-secret:** révoquer la version Scaleway sur retrait opt-in (closes [#116](https://github.com/mathieubodin/scaleway-operator/issues/116)) ([d61d700](https://github.com/mathieubodin/scaleway-operator/commit/d61d70037aeb6488074bc2bfaf3fbdbe4667e022))
+* **scaleway-secret:** tracer l'échec du patch Revoked (observabilité) ([4712634](https://github.com/mathieubodin/scaleway-operator/commit/471263465af4290f3269ea268236eb765c3c5a82))
+* **scaleway-secret:** transitionner status vers Error si create échoue après prelim ([4d87af9](https://github.com/mathieubodin/scaleway-operator/commit/4d87af9b398586160e8b62b5fb78f2dcbfbde8a7))
+* **scaleway-secret:** validate region, enforce NamespaceRole and retry failed revocation ([ecbd559](https://github.com/mathieubodin/scaleway-operator/commit/ecbd559a5da351a0588fa94ebe6bd796d838c032))
+* **scaleway:** drop redundant references in format! arguments ([8844e91](https://github.com/mathieubodin/scaleway-operator/commit/8844e917717266cfda26a1971dd21cad9d5afdf5))
+* **security:** Confused Deputy — opt-in label + namespace-scoped RBAC ([5aa63f3](https://github.com/mathieubodin/scaleway-operator/commit/5aa63f3657c6eeac60399145f359229cc8bb9fc5))
+* **security:** SEC-002 — remplacer hash de valeur par resourceVersion ([797b2d2](https://github.com/mathieubodin/scaleway-operator/commit/797b2d26f08bc4a93290ac798cbc71fd8e795674))
+* **security:** TOCTOU + info disclosure + permanent SecretKeyNotFound ([6f35080](https://github.com/mathieubodin/scaleway-operator/commit/6f350807e3c7073a241d87306a5d4f94479a1236))
+
+
+### Refactoring
+
+* **scaleway-secret:** typed KsSourceState enum + doc cascade resourceVersion (closes [#118](https://github.com/mathieubodin/scaleway-operator/issues/118)) ([304aeda](https://github.com/mathieubodin/scaleway-operator/commit/304aedad29a9949be6873d52b1b9f5339e43f1fe))
+
+
+### Documentation
+
+* **analyses:** add burn-down skill analysis ([13e399e](https://github.com/mathieubodin/scaleway-operator/commit/13e399e8c126137eff98a8607d06d957404f4838))
+* **analyses:** add burn-down skill analysis ([9b52118](https://github.com/mathieubodin/scaleway-operator/commit/9b521186e36c6829f6c8ff0686d0dd0e78ea7832))
+* **ci-coverage:** add Pipeline CI section to CONTRIBUTING.md ([f18e456](https://github.com/mathieubodin/scaleway-operator/commit/f18e456bdb113109f1e266e44a8c628f12e99d05)), refs [#101](https://github.com/mathieubodin/scaleway-operator/issues/101)
+* **claude-md:** documenter les reconcilers LoadBalancer et ScalewaySecret ([561e492](https://github.com/mathieubodin/scaleway-operator/commit/561e4921bdc18da2f11ef83440e9ebbf664ec03c))
+* **contributing:** define the token figure reported by /cost ([984e5c7](https://github.com/mathieubodin/scaleway-operator/commit/984e5c78213e067be8ddddd57bddb8bd399bc779))
+* **contributing:** define the token figure reported by /cost ([2f8464c](https://github.com/mathieubodin/scaleway-operator/commit/2f8464cba39840344fef28788abf4f0ecf2ee0ac))
+* **contributing:** enrichir la section Pipeline CI (post-review) ([af2f8df](https://github.com/mathieubodin/scaleway-operator/commit/af2f8dfa56fbe910d71ce14015239ed982462f5a))
+* move reconciler flows to ARCHITECTURE.md and document shell-based GitHub access ([961aa19](https://github.com/mathieubodin/scaleway-operator/commit/961aa1966e1cae8a867a558da3df9e5a3394ecce)), refs [#132](https://github.com/mathieubodin/scaleway-operator/issues/132)
+* **readme:** badges + CRDs M1 + liens documentation ([358ef83](https://github.com/mathieubodin/scaleway-operator/commit/358ef83f9e6dbc2e5e487df70e5e68bd38ef79ad))
+* replace CLAUDE.md with AGENTS.md and document shell-based GitHub access ([2809e96](https://github.com/mathieubodin/scaleway-operator/commit/2809e962e81c79f336a295b8f38d95436c27db84))
+* **scaleway-secret:** clarifier les findings reviewer sur [#114](https://github.com/mathieubodin/scaleway-operator/issues/114) ([7273fc8](https://github.com/mathieubodin/scaleway-operator/commit/7273fc8174c7e51c19131ce31bb25a7a0e953540))
+* **scaleway-secret:** polish [#118](https://github.com/mathieubodin/scaleway-operator/issues/118) — frontmatter + escalation invariant ([6dc68c7](https://github.com/mathieubodin/scaleway-operator/commit/6dc68c71f10ad9ab71728002486b8666914a0f52))
+* **scaleway-secret:** polish CLAUDE.md — exemple YAML + limite trust boundary ([a62aea0](https://github.com/mathieubodin/scaleway-operator/commit/a62aea0c6478e7463d06ac683c725dd7b7f95632))
+* **solutions:** document that integration test scaffolds must be skipped in kind runs ([41af983](https://github.com/mathieubodin/scaleway-operator/commit/41af983b38f230574f1dfb34c3d1847eea4e8074)), refs [#118](https://github.com/mathieubodin/scaleway-operator/issues/118)
+
 ## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.12...scaleway-operator-v0.1.13) (2026-06-12)
 
 
