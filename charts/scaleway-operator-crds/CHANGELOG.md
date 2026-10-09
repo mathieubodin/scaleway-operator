@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.12...scaleway-operator-crds-v0.1.13) (2026-10-09)
+
+
+### Features
+
+* **milestone-1:** CI coverage gate + ScalewaySecret CRD reconciler ([297616c](https://github.com/mathieubodin/scaleway-operator/commit/297616c53d75f2bc732b9e3e17f248ce75f6dc70))
+* **scaleway-secret:** U6 — CRD manifests + Helm chart for ScalewaySecret ([2b179db](https://github.com/mathieubodin/scaleway-operator/commit/2b179db8c0578136b8532b06f7f56ba0ceed1fb7)), refs [#64](https://github.com/mathieubodin/scaleway-operator/issues/64)
+
+
+### Bug Fixes
+
+* **chart:** keep the ScalewaySecret CRD on uninstall and align finalizer name in docs ([02a0197](https://github.com/mathieubodin/scaleway-operator/commit/02a01974bc181fe4898631f35bd1c67b6886c7a8))
+* **security:** SEC-002 — remplacer hash de valeur par resourceVersion ([797b2d2](https://github.com/mathieubodin/scaleway-operator/commit/797b2d26f08bc4a93290ac798cbc71fd8e795674))
+
+
+### Documentation
+
+* move reconciler flows to ARCHITECTURE.md and document shell-based GitHub access ([961aa19](https://github.com/mathieubodin/scaleway-operator/commit/961aa1966e1cae8a867a558da3df9e5a3394ecce)), refs [#132](https://github.com/mathieubodin/scaleway-operator/issues/132)
+
 ## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.11...scaleway-operator-crds-v0.1.12) (2026-06-12)
 
 

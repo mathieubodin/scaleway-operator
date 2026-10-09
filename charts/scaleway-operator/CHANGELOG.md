@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-chart-v0.1.12...scaleway-operator-chart-v0.1.13) (2026-10-09)
+
+
+### Features
+
+* **milestone-1:** CI coverage gate + ScalewaySecret CRD reconciler ([297616c](https://github.com/mathieubodin/scaleway-operator/commit/297616c53d75f2bc732b9e3e17f248ce75f6dc70))
+* **scaleway-secret:** U6 — CRD manifests + Helm chart for ScalewaySecret ([2b179db](https://github.com/mathieubodin/scaleway-operator/commit/2b179db8c0578136b8532b06f7f56ba0ceed1fb7)), refs [#64](https://github.com/mathieubodin/scaleway-operator/issues/64)
+
+
+### Bug Fixes
+
+* **security:** Confused Deputy — opt-in label + namespace-scoped RBAC ([5aa63f3](https://github.com/mathieubodin/scaleway-operator/commit/5aa63f3657c6eeac60399145f359229cc8bb9fc5))
+
+
+### Documentation
+
+* move reconciler flows to ARCHITECTURE.md and document shell-based GitHub access ([961aa19](https://github.com/mathieubodin/scaleway-operator/commit/961aa1966e1cae8a867a558da3df9e5a3394ecce)), refs [#132](https://github.com/mathieubodin/scaleway-operator/issues/132)
+
 ## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
 
 
