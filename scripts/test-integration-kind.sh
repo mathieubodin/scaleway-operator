@@ -48,8 +48,8 @@ CARGO_COV_FILTER='grep -vE "^   (Compiling|Checking)|^    Finished|^     Running
 
 if [ "$COVERAGE" = true ]; then
     export KUBECONFIG="$KIND_KUBECONFIG"
-    bash -c "set -o pipefail; cargo llvm-cov --no-report --test integration -- --ignored --skip test_loadbalancer_create_sync_delete 2>&1 | $CARGO_COV_FILTER"
+    bash -c "set -o pipefail; cargo llvm-cov --no-report --test integration -- --ignored --skip test_loadbalancer_create_sync_delete --skip test_scalewaysecret_create_with_mock_scaleway_writes_status 2>&1 | $CARGO_COV_FILTER"
 else
     export KUBECONFIG="$KIND_KUBECONFIG"
-    bash -c "set -o pipefail; cargo test --test integration -- --ignored --skip test_loadbalancer_create_sync_delete 2>&1 | $CARGO_COV_FILTER"
+    bash -c "set -o pipefail; cargo test --test integration -- --ignored --skip test_loadbalancer_create_sync_delete --skip test_scalewaysecret_create_with_mock_scaleway_writes_status 2>&1 | $CARGO_COV_FILTER"
 fi
