@@ -77,7 +77,7 @@ Pattern miroir à `Instance`, adapté aux LB Scaleway :
 Pattern différent — pas de notion de zone, source Kubernetes au lieu d'un spec immuable :
 
 1. Récupère le `NamespaceRole` cluster-wide associé au namespace (erreur bloquante si absent).
-2. Gère le `deletion_timestamp` (suppression best-effort côté Scaleway Secret Manager sur révocation) ou ajoute le finalizer `scaleway.mathieubodin.io/scalewaysecret-finalizer` si absent.
+2. Gère le `deletion_timestamp` (suppression best-effort côté Scaleway Secret Manager sur révocation) ou ajoute le finalizer `scaleway.mathieubodin.io/secret-finalizer` si absent.
 3. Lit le Secret K8s source en respectant le double contrôle opt-in label + annotation `allowed-cr` (cf. « Prérequis Secret source pour `ScalewaySecret` ») ; refus permanent `SecretOptInMissing` sinon.
 4. Adopte le secret Scaleway existant (lookup par nom) ou le crée si absent, puis met à jour `status.scaleway_id`.
 5. Pousse une nouvelle version du secret côté Scaleway et persiste le `metadata.resourceVersion` du Secret K8s source dans le `status` — c'est le marqueur qui sert à détecter la prochaine rotation (trade-off documenté dans [`docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md`](docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md)).
