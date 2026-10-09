@@ -45,7 +45,7 @@ impl ScalewayClient {
             }
         });
 
-        let url = format!("{}/instance/v1/zones/{}/servers", self.base_url, &spec.zone);
+        let url = format!("{}/instance/v1/zones/{}/servers", self.base_url, spec.zone);
 
         let response = self
             .http_client
@@ -348,7 +348,7 @@ impl ScalewayClient {
             "tags": tags,
         });
 
-        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, &spec.zone);
+        let url = format!("{}/lb/v1/zones/{}/lbs", self.base_url, spec.zone);
 
         let response = self
             .http_client
@@ -721,6 +721,21 @@ impl ScalewayClient {
         }
     }
 
+    /// La région est interpolée dans le chemin des URLs Secret Manager : la valider
+    /// avant tout appel empêche une région forgée de viser un autre chemin de l'API.
+    pub fn validate_region(region: &str) -> Result<()> {
+        let valid_regions = ["fr-par", "nl-ams", "pl-waw"];
+
+        if valid_regions.contains(&region) {
+            Ok(())
+        } else {
+            Err(OperatorError::ConfigError(format!(
+                "Invalid region '{}'. Use one of: fr-par, nl-ams, pl-waw.",
+                region
+            )))
+        }
+    }
+
     pub fn validate_lb_type(&self, lb_type: &str) -> Result<()> {
         // Types LB Scaleway (liste non exhaustive — types commerciaux actuels)
         let valid_types = ["LB-S", "LB-GP"];
@@ -787,6 +802,28 @@ mod tests {
             network: None,
             security: None,
         }
+    }
+
+    // --- validate_region ---
+
+    #[test]
+    fn test_validate_region_accepts_secret_manager_regions() {
+        for region in ["fr-par", "nl-ams", "pl-waw"] {
+            assert!(ScalewayClient::validate_region(region).is_ok(), "{region}");
+        }
+    }
+
+    #[test]
+    fn test_validate_region_rejects_path_traversal() {
+        let result =
+            ScalewayClient::validate_region("../../../instance/v1/zones/fr-par-1/servers/x?");
+        assert!(matches!(result, Err(OperatorError::ConfigError(_))));
+    }
+
+    #[test]
+    fn test_validate_region_rejects_zone_and_empty() {
+        assert!(ScalewayClient::validate_region("fr-par-1").is_err());
+        assert!(ScalewayClient::validate_region("").is_err());
     }
 
     // --- validate_zone ---

@@ -1501,9 +1501,9 @@ fn build_revoked_status(current_status: &ScalewaySecretStatus) -> ScalewaySecret
 /// quand l'utilisateur retire le label/annotation opt-in d'un Secret K8s
 /// précédemment synchronisé.
 ///
-/// Best-effort sur le call Scaleway (cohérent avec le pattern #114) : un
-/// échec est logué en `warn!`, le status est patché quand même pour signaler
-/// la révocation côté K8s. Si `current_version` est `None` (cas où le patch
+/// Le status ne passe à `Revoked` que si la désactivation Scaleway a abouti :
+/// en cas d'échec, l'erreur est renvoyée pour que la révocation soit retentée,
+/// sans jamais annoncer une version désactivée qui ne l'est pas. Si `current_version` est `None` (cas où le patch
 /// préliminaire #117 a posé `scaleway_id` mais `create_secret_version` n'a
 /// pas encore réussi), le disable est sauté — il n'y a rien à désactiver.
 async fn handle_opt_in_revocation(
@@ -1514,7 +1514,7 @@ async fn handle_opt_in_revocation(
     current_status: &ScalewaySecretStatus,
     region: &str,
     scaleway_id: &str,
-) {
+) -> Result<()> {
     tracing::warn!(
         name = %secret_cr.name_any(),
         namespace = %namespace,
@@ -1537,8 +1537,9 @@ async fn handle_opt_in_revocation(
                         scaleway_id = %scaleway_id,
                         revision = revision,
                         error = %e,
-                        "Failed to disable Scaleway secret version on opt-in revocation — best-effort, status will still be marked Revoked (see issue #116)"
+                        "Failed to disable Scaleway secret version on opt-in revocation — status left unchanged, will retry (see issue #116)"
                     );
+                    return Err(e);
                 }
             }
             Err(e) => {
@@ -1546,8 +1547,9 @@ async fn handle_opt_in_revocation(
                     name = %secret_cr.name_any(),
                     scaleway_id = %scaleway_id,
                     error = %e,
-                    "Could not build namespace client to disable Scaleway secret version — status will still be marked Revoked"
+                    "Could not build namespace client to disable Scaleway secret version — status left unchanged"
                 );
+                return Err(e);
             }
         }
     } else {
@@ -1569,7 +1571,9 @@ async fn handle_opt_in_revocation(
             error = %e,
             "Failed to patch Revoked status — Scaleway disable already applied, will retry on next reconcile"
         );
+        return Err(e);
     }
+    Ok(())
 }
 
 /// Met à jour le status avec un message générique (anonymise les noms de Secret/clé)
@@ -1719,6 +1723,48 @@ async fn reconcile_scaleway_secret_inner(
 
     let current_status = secret_cr.status.clone().unwrap_or_default();
 
+    // spec.region part dans le chemin des URLs Scaleway : la valider avant tout appel,
+    // suppression comprise.
+    if let Err(e) = ScalewayClient::validate_region(&secret_cr.spec.region) {
+        let mut status = current_status;
+        status.error_message = Some(e.for_status());
+        status.sync_state = "Error".to_string();
+        let _ = update_secret_status(&secret_cr, &api, status).await;
+        return Err(e);
+    }
+
+    // Un rôle en lecture seule ne doit ni créer ni versionner de secret. La suppression
+    // reste permise, comme pour Instance et LoadBalancer.
+    if !deletion_requested && !circuit_open {
+        let role = match get_scaleway_role_for_namespace(&ctx.client, &namespace).await {
+            Ok(role) => role,
+            Err(e) => {
+                tracing::error!(
+                    name = %secret_cr.name_any(),
+                    namespace = %namespace,
+                    error = %e,
+                    "Cannot proceed without NamespaceRole"
+                );
+                let mut status = current_status;
+                status.error_message = Some(e.for_status());
+                status.sync_state = "Error".to_string();
+                let _ = update_secret_status(&secret_cr, &api, status).await;
+                return Err(e);
+            }
+        };
+        if !role_allows_write(&role) {
+            let e = OperatorError::ConfigError(format!(
+                "Role '{}' is read-only and cannot sync secrets. Use 'Editor' or 'Admin'.",
+                role
+            ));
+            let mut status = current_status;
+            status.error_message = Some(e.for_status());
+            status.sync_state = "Error".to_string();
+            let _ = update_secret_status(&secret_cr, &api, status).await;
+            return Err(e);
+        }
+    }
+
     // Lecture UNIQUE du Secret K8s source — la TOCTOU sur le label d'opt-in est éliminée
     // car la valeur extraite (payload) provient du MÊME `get` qui a vérifié l'opt-in.
     // Les branches CreateAndSyncSecret et PushNewVersion réutilisent `ks_payload`
@@ -1750,6 +1796,8 @@ async fn reconcile_scaleway_secret_inner(
                     // continuent l'anonymisation SEC-002 via record_source_error_in_status.
                     if matches!(&e, OperatorError::SecretOptInMissing(_)) {
                         if let Some(sid) = current_status.scaleway_id.clone() {
+                            // Tant que la révocation n'a pas abouti, on renvoie son erreur
+                            // (transitoire côté Scaleway) pour qu'elle soit retentée.
                             handle_opt_in_revocation(
                                 &ctx,
                                 &secret_cr,
@@ -1759,7 +1807,7 @@ async fn reconcile_scaleway_secret_inner(
                                 &secret_cr.spec.region,
                                 &sid,
                             )
-                            .await;
+                            .await?;
                             return Err(e);
                         }
                     }
