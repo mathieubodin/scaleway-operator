@@ -19,6 +19,7 @@
       "prerelease": false
     },
     "charts/scaleway-operator": {
+      "component": "scaleway-operator-chart",
       "changelog-path": "CHANGELOG.md",
       "release-type": "helm",
       "bump-minor-pre-major": true,
