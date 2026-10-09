@@ -87,12 +87,13 @@ Pour reproduire localement les vérifications CI, voir la section [Commandes de 
 (`make coverage-text`, `make coverage`, `make test-integration-kind`) et la section [Tests d'intégration](#tests-dintégration)
 pour le détail du déploiement kind utilisé par le job d'intégration.
 
-Deux workflows GitHub Actions s'exécutent automatiquement :
+Trois workflows GitHub Actions s'exécutent automatiquement :
 
 | Workflow | Déclencheur | Jobs |
 | --- | --- | --- |
 | `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
-| `release.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `integration.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `release.yml` | Release publiée | `image` (tags `scaleway-operator-v*`), `chart` (tags `scaleway-operator-chart-v*` et `scaleway-operator-crds-v*`) |
 
 Le gate de merge repose sur trois required status checks :
 
@@ -129,6 +130,34 @@ Sans ce secret, `pr.yml` passe quand même (les tests tournent) mais l'upload Co
   Solution : ouvrir les logs du job `unit-tests` dans GitHub Actions et vérifier que l'étape d'upload Codecov
   s'est terminée avec succès (token valide, fichier `lcov.info` non vide).
 
+### Publier une release
+
+Une release se prépare et se publie depuis le shell, avec l'authentification `gh` locale (scope `repo`).
+Une PR ou une release créée avec ce token déclenche les workflows, ce que ne fait pas le token standard des Actions.
+Aucun token personnel n'est stocké dans le dépôt.
+
+L'ordre est toujours le même :
+
+1. `make release-prepare` ouvre ou met à jour la PR de release avec release-please, puis y réapplique
+   les versions de chart du README. La PR reçoit les checks `lint` et `unit-tests`.
+2. Merger la PR de release. Le workflow `integration.yml` s'exécute sur le commit de merge.
+3. `make release-publish` vérifie que ces tests d'intégration sont verts, puis crée les tags et les releases.
+   Chaque release publiée déclenche `release.yml`, qui construit l'image ou pousse le chart selon le préfixe du tag.
+
+Points d'attention :
+
+- Ne jamais lancer release-please autrement que par `make release-prepare` : il régénère sa branche
+  et écraserait le commit du README.
+- `make release-prepare` refuse de démarrer tant qu'une PR de release mergée n'est pas publiée.
+- Si la publication échoue alors que la release existe déjà, relancer le workflow `release.yml` sur cette release.
+- La version de la CLI release-please est épinglée dans `scripts/release-common.sh`.
+
+| Composant | Préfixe de tag |
+| --- | --- |
+| Binaire et image | `scaleway-operator-v` |
+| Chart `scaleway-operator` | `scaleway-operator-chart-v` |
+| Chart `scaleway-operator-crds` | `scaleway-operator-crds-v` |
+
 ### Déploiement sur un cluster réel
 
 #### Kubeconfig
@@ -162,7 +191,7 @@ Sur Scaleway Kapsule, le nom d'utilisateur est `scaleway:bearer:<uuid-du-token-i
 
 ## Roadmap
 
-Le [Project v2](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
+Le [Project GitHub](https://github.com/users/mathieubodin/projects/2) est la source de vérité pour la planification.
 Chaque issue ouverte y est automatiquement ajoutée et classifiée selon 4 dimensions : axe stratégique, priorité, effort, et coût en tokens IA.
 
 ### Configurer le secret `GH_PROJECT_TOKEN`
@@ -193,80 +222,12 @@ Les workflows de traçabilité (`auto-add-to-project`, `update-status-on-pr`, `p
 
 **Renouvellement** : générer un nouveau classic PAT avec le même scope `project`, puis mettre à jour le secret `GH_PROJECT_TOKEN` dans [Settings → Secrets → Actions](https://github.com/mathieubodin/scaleway-operator/settings/secrets/actions).
 
-### Configurer l'identité agent `agentic-assistant-1`
-
-L'App GitHub `agentic-assistant-1` donne à Claude Code une identité `[bot]` traçable sur les issues, PRs, commentaires et commits. Cette configuration est locale à chaque machine — elle ne touche pas les commandes `gh` et `git` du mainteneur tapées directement dans le terminal.
-
-#### 1. Créer l'App GitHub
-
-Aller sur [github.com/settings/apps/new](https://github.com/settings/apps/new) :
-
-| Champ | Valeur |
-| --- | --- |
-| GitHub App name | `agentic-assistant-1` |
-| Homepage URL | `https://github.com/mathieubodin` |
-| Webhook — Active | décocher |
-| Request user authorization (OAuth) | décocher |
-| Enable Device Flow | décocher |
-
-**Permissions du dépôt :**
-
-| Permission | Niveau |
-| --- | --- |
-| Issues | Read and write |
-| Metadata | Read-only (obligatoire) |
-| Pull requests | Read and write |
-| Tout le reste | No access |
-
-**Where can this GitHub App be installed?** → `Only on this account`
-
-Soumettre, puis sur la page de l'App créée :
-
-- Noter l'**App ID** (visible en haut de page)
-- Cliquer **Generate a private key** → télécharge un fichier `.pem`
-
-#### 2. Installer l'App sur les dépôts
-
-Aller dans [Settings → Applications → Installations](https://github.com/settings/apps/agentic-assistant-1/installations) → **Install** → sélectionner `mathieubodin` → choisir les dépôts souhaités.
-
-Après installation, l'URL de la page contient l'**Installation ID** :
-`https://github.com/settings/installations/<INSTALLATION_ID>`
-
-#### 3. Stocker les credentials
+**Usage local (terminal ou Claude Code)** : le token `gh` du mainteneur suffit pour tout, issues, PRs et board compris.
+Il doit porter les scopes `repo`, `read:org` et `project` :
 
 ```bash
-mkdir -p ~/.config/gh-apps
-mv /chemin/vers/agentic-assistant-1.*.pem ~/.config/gh-apps/agentic-assistant-1.pem
-chmod 600 ~/.config/gh-apps/agentic-assistant-1.pem
-
-cat > ~/.config/gh-apps/agentic-assistant-1.env << 'EOF'
-APP_ID=<app_id>
-INSTALLATION_ID=<installation_id>
-EOF
-chmod 600 ~/.config/gh-apps/agentic-assistant-1.env
-```
-
-#### 4. Lancer le script de setup
-
-Depuis la racine du dépôt :
-
-```bash
-bash scripts/setup-agent-identity.sh
-```
-
-Le script vérifie les prérequis, installe l'extension `gh-token` si nécessaire, récupère le `BOT_USER_ID`, et enregistre le hook dans `.claude/settings.local.json`.
-
-**Comportement selon l'état de la configuration :**
-
-| État | Comportement |
-| --- | --- |
-| `~/.config/gh-apps/agentic-assistant-1.env` absent | Hook inactif — Claude Code opère sous l'identité du mainteneur |
-| Configuration présente | `GH_TOKEN` App injecté sur toutes les commandes `gh`, `GIT_AUTHOR_*` sur tous les `git commit` |
-
-**Projects v2** : les mutations GraphQL Projects v2 ne sont pas accessibles via les tokens d'App (restriction GitHub). Elles doivent toujours être préfixées explicitement :
-
-```bash
-GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql ...
+gh auth refresh -s project
+gh auth status
 ```
 
 ### Token tracking git
@@ -337,7 +298,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 
 #### Instructions de session pour l'agent (F2)
 
-1. **Lire le Backlog** depuis Project v2 via GraphQL (`PVT_kwHOAAJUjc4BYpzh`) :
+1. **Lire le Backlog** depuis le Project GitHub via GraphQL (`PVT_kwHOAAJUjc4BYpzh`) :
    issues avec `Status = Backlog` (`f75ad846`) non assignées à un milestone ouvert.
    Par défaut : proposer uniquement P0 (`43a64d76`) et P1 (`1ba4b43d`).
 2. **Récupérer les sous-issues** : `GET /repos/mathieubodin/scaleway-operator/issues/{n}/sub_issues`
@@ -355,7 +316,7 @@ Un milestone est un **feature bundle** : un ensemble d'issues Backlog cohérent,
 >
 > **Règle des priorités** : la priorité (P0-P3) est une classification de Backlog indicative. Elle peut être promue lors de la session de composition si le contexte le justifie. C'est la session de milestone qui fait foi pour la composition finale.
 >
-> **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue Project v2 dans l'UI GitHub Projects.
+> **Setup R11 (one-time)** : après la création du premier milestone, ajouter le champ `Milestone` natif à la vue du Project GitHub dans l'interface web.
 
 ## Proposer une fonctionnalité
 
@@ -418,7 +379,7 @@ Avant de merger une PR, commentez le coût en tokens IA consommés pour l'implé
 ```
 
 Le chiffre doit être un entier sans séparateur de milliers, en début de ligne.
-Ce commentaire met à jour automatiquement le champ **Tokens** du Project v2 pour chaque issue liée via `Closes/Fixes/Resolves`.
+Ce commentaire met à jour automatiquement le champ **Tokens** du Project GitHub pour chaque issue liée via `Closes/Fixes/Resolves`.
 Si vous commentez plusieurs fois, le dernier `/cost` prévaut.
 
 ## Style de code

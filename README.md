@@ -540,7 +540,7 @@ Types valides :
               - Verify project access
 ```
 
-Pour la documentation détaillée de l'architecture interne (modules, flux de réconciliation par CRD, contrats), voir [CLAUDE.md](CLAUDE.md).
+Pour la documentation détaillée de l'architecture interne (modules, flux de réconciliation par CRD, contrats), voir [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 📝 Structure du code
 

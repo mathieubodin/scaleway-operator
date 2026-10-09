@@ -1,89 +1,21 @@
 name: Release
 
+# Publication seule. Les tags et releases sont créés depuis le shell par
+# `make release-publish` avec le token `gh` local : une release créée avec ce token
+# déclenche ce workflow, contrairement au token standard des Actions.
+# `make release-publish` exige des tests d'intégration verts avant de créer la release.
+# Le préfixe du tag choisit l'action : image pour le binaire, push OCI pour un chart.
 on:
-  push:
-    branches:
-      - main
+  release:
+    types: [published]
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 1: Release Please
-  # Crée et maintient une "Release PR" basée sur les commits conventionnels.
-  # Quand la PR est mergée : crée un tag Git sémantique + une GitHub Release.
+  # Job 1: Build multi-arch + push GHCR + cosign signing
+  # Tags `scaleway-operator-v*` (binaire).
   # ────────────────────────────────────────────────────────────────────────────
-  release-please:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name:        ${{ steps.release.outputs.tag_name }}
-      version:         ${{ steps.release.outputs.version }}
-      sha:             ${{ steps.release.outputs.sha }}
-    steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
-        id: release
-        with:
-          token:         ${{ secrets.GITHUB_TOKEN }}
-          config-file:   release-please-config.json
-          manifest-file: .release-please-manifest.json
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: Tests d'intégration via kind (gate de release)
-  # Tourne sur chaque push main. build-and-push dépend de ce job.
-  # ────────────────────────────────────────────────────────────────────────────
-  integration-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      # kind est préinstallé sur ubuntu-latest (appartient à root — ne pas réinstaller
-      # par curl/chmod sans sudo). Le script de test ne pinne aucune node image.
-      - name: Show kind version
-        run: kind version
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-integration-
-
-      - name: Set up Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912  # v2
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Run coverage (unit + integration)
-        run: make coverage-kind-lcov
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
-        with:
-          files: target/llvm-cov/lcov.info
-          flags: integration
-          token: ${{ secrets.CODECOV_TOKEN }}
-        continue-on-error: true
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 3: Build multi-arch + push GHCR + cosign signing
-  # Déclenché UNIQUEMENT quand release-please a créé une release ET les tests
-  # d'intégration sont verts.
-  # ────────────────────────────────────────────────────────────────────────────
-  build-and-push:
-    needs: [release-please, integration-tests]
-    if: ${{ needs.release-please.outputs.release_created == 'true' && needs.integration-tests.result == 'success' }}
+  image:
+    if: ${{ startsWith(github.event.release.tag_name, 'scaleway-operator-v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,8 +26,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          ref: ${{ needs.release-please.outputs.sha }}
+
+      # Version sans le préfixe de composant : docker/metadata-action attend un semver nu.
+      - name: Extract version from tag
+        id: version
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${TAG_NAME#scaleway-operator-v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid version in tag: $TAG_NAME" >&2; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # Buildx requis pour --platform multi-arch
       - name: Set up Docker Buildx
@@ -118,9 +58,9 @@ jobs:
           flavor: |
             latest=auto
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
-            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.version }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }}
             type=sha,prefix=sha-,format=short
           labels: |
             org.opencontainers.image.title=scaleway-operator
@@ -170,87 +110,48 @@ jobs:
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
-      # Publication des Helm charts en OCI sur GHCR
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: Publication d'un chart Helm en OCI sur GHCR
+  # Tags `scaleway-operator-chart-v*` et `scaleway-operator-crds-v*`.
+  # ────────────────────────────────────────────────────────────────────────────
+  chart:
+    if: ${{ startsWith(github.event.release.tag_name, 'scaleway-operator-chart-v') || startsWith(github.event.release.tag_name, 'scaleway-operator-crds-v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
       - name: Log in to GHCR Helm registry
-        run: |
-          helm registry login ghcr.io \
-            --username ${{ github.actor }} \
-            --password ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GH_ACTOR" --password-stdin
 
-      - name: Create chart output directory
-        run: mkdir -p target/charts
-
-      - name: Package and push scaleway-operator-crds chart
+      - name: Package and push chart
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          CHART_VERSION=$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}')
-          if [ -z "$CHART_VERSION" ]; then
-            echo "ERROR: Could not determine chart version from charts/scaleway-operator-crds/Chart.yaml" >&2
+          case "$TAG_NAME" in
+            scaleway-operator-chart-v*) CHART=scaleway-operator;      VERSION="${TAG_NAME#scaleway-operator-chart-v}" ;;
+            scaleway-operator-crds-v*)  CHART=scaleway-operator-crds; VERSION="${TAG_NAME#scaleway-operator-crds-v}" ;;
+          esac
+          CHART_VERSION=$(grep '^version:' "charts/${CHART}/Chart.yaml" | awk '{print $2}')
+          if [ "$CHART_VERSION" != "$VERSION" ]; then
+            echo "ERROR: tag $TAG_NAME does not match charts/${CHART}/Chart.yaml version '$CHART_VERSION'" >&2
             exit 1
           fi
-          helm package charts/scaleway-operator-crds --destination target/charts/
+          mkdir -p target/charts
+          helm package "charts/${CHART}" --destination target/charts/
           for attempt in 1 2 3; do
-            helm push "target/charts/scaleway-operator-crds-${CHART_VERSION}.tgz" \
-              oci://ghcr.io/${{ github.repository_owner }}/charts && break
+            helm push "target/charts/${CHART}-${VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts" && exit 0
             [ "$attempt" -lt 3 ] && echo "Push attempt $attempt failed, retrying…" && sleep 10
           done
-
-      - name: Package and push scaleway-operator chart
-        run: |
-          CHART_VERSION=$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}')
-          if [ -z "$CHART_VERSION" ]; then
-            echo "ERROR: Could not determine chart version from charts/scaleway-operator/Chart.yaml" >&2
-            exit 1
-          fi
-          helm package charts/scaleway-operator --destination target/charts/
-          for attempt in 1 2 3; do
-            helm push "target/charts/scaleway-operator-${CHART_VERSION}.tgz" \
-              oci://ghcr.io/${{ github.repository_owner }}/charts && break
-            [ "$attempt" -lt 3 ] && echo "Push attempt $attempt failed, retrying…" && sleep 10
-          done
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 4: Sync README helm versions
-  # Met à jour --version X.Y.Z dans README.md après chaque release de chart.
-  # Push via GITHUB_TOKEN : GitHub ne re-déclenche pas de workflow run pour les
-  # push effectués avec ce token (suppression plateforme, pas de boucle CI).
-  # Précondition : github-actions[bot] doit pouvoir pousser sur main directement.
-  # ────────────────────────────────────────────────────────────────────────────
-  sync-readme-versions:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read and validate chart versions
-        id: chart-version
-        run: |
-          CRD_VER=$(grep '^version:' charts/scaleway-operator-crds/Chart.yaml | awk '{print $2}')
-          OP_VER=$(grep '^version:' charts/scaleway-operator/Chart.yaml | awk '{print $2}')
-          [[ "$CRD_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid crds version: $CRD_VER" >&2; exit 1; }
-          [[ "$OP_VER"  =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid operator version: $OP_VER"  >&2; exit 1; }
-          echo "crds=$CRD_VER"     >> "$GITHUB_OUTPUT"
-          echo "operator=$OP_VER"  >> "$GITHUB_OUTPUT"
-
-      - name: Update README helm versions
-        run: |
-          sed -i '/ghcr\.io\/mathieubodin\/charts\/scaleway-operator-crds/{n;s/--version [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/--version ${{ steps.chart-version.outputs.crds }}/}' README.md
-          sed -i '/ghcr\.io\/mathieubodin\/charts\/scaleway-operator[^-]/{n;s/--version [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/--version ${{ steps.chart-version.outputs.operator }}/}' README.md
-
-      - name: Commit if changed
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name  "github-actions[bot]"
-          git diff --quiet README.md || (
-            git add README.md &&
-            git commit -m "chore: sync README helm versions (crds=${{ steps.chart-version.outputs.crds }}, operator=${{ steps.chart-version.outputs.operator }})" &&
-            git push
-          )
+          exit 1
