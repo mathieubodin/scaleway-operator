@@ -25,7 +25,10 @@ tags:
 
 ## Context
 
-Dans un opérateur kube-rs réconciliant N ressources en parallèle, le backoff exponentiel par ressource (géré dans `error_policy`) espace les retries individuels. Mais lors d'une panne Scaleway, N instances accumulent chacune des erreurs — et leurs timers de backoff expirent de façon groupée, générant une rafale de requêtes simultanées contre une API déjà dégradée.
+Dans un opérateur kube-rs réconciliant N ressources en parallèle, le backoff exponentiel par ressource (géré dans
+`error_policy`) espace les retries individuels. Mais lors d'une panne Scaleway, N instances accumulent chacune des
+erreurs — et leurs timers de backoff expirent de façon groupée, générant une rafale de requêtes simultanées contre
+une API déjà dégradée.
 
 Le circuit breaker résout ce problème en coupant globalement les appels Scaleway dès qu'un seuil d'erreurs consécutives est atteint, indépendamment du nombre de ressources en erreur.
 
@@ -54,7 +57,7 @@ pub struct Context {
 
 ### Machine à états
 
-```
+```text
           5 erreurs transitoires        timeout 60s
 Closed ─────────────────────────► Open ──────────────► HalfOpen
   ▲                                                          │
@@ -115,7 +118,10 @@ if matches!(error, OperatorError::CircuitBreakerOpen) {
 
 ### Limitations connues
 
-**Compteur global** : le compteur d'erreurs est partagé entre toutes les instances. Instance A (3 échecs) + instance B (2 échecs) = circuit ouvert, même si aucune n'a atteint le seuil individuellement. Ce comportement est intentionnel pour les pannes soutenues, mais ne protège pas contre le flapping (API intermittente). Une fenêtre glissante par endpoint serait l'évolution naturelle.
+**Compteur global** : le compteur d'erreurs est partagé entre toutes les instances. Instance A (3 échecs) +
+instance B (2 échecs) = circuit ouvert, même si aucune n'a atteint le seuil individuellement. Ce comportement est
+intentionnel pour les pannes soutenues, mais ne protège pas contre le flapping (API intermittente). Une fenêtre
+glissante par endpoint serait l'évolution naturelle.
 
 **HalfOpen thundering herd** : si N instances lisent simultanément `is_circuit_open()` pendant l'état HalfOpen, toutes obtiennent `false` et envoient N appels de sonde en même temps. Acceptable pour des déploiements de taille modérée.
 

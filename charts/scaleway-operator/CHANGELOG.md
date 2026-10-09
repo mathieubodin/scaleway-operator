@@ -1,12 +1,31 @@
 # Changelog
 
-## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-29)
+## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
+
+
+### Documentation
+
+* **ops:** fix sub-issues API + style cleanup ([#107](https://github.com/mathieubodin/scaleway-operator/issues/107)) ([90300b0](https://github.com/mathieubodin/scaleway-operator/commit/90300b053ba61e6a598ea950996a13038f888bbd))
+
+## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.10...scaleway-operator-v0.1.11) (2026-06-12)
+
+
+### Documentation
+
+* **ops:** fix sub-issues API + style cleanup ([#107](https://github.com/mathieubodin/scaleway-operator/issues/107)) ([90300b0](https://github.com/mathieubodin/scaleway-operator/commit/90300b053ba61e6a598ea950996a13038f888bbd))
+
+## [0.1.10](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.9...scaleway-operator-v0.1.10) (2026-06-03)
 
 
 ### Bug Fixes
 
 * **lint:** remove dead code and needless returns in reconcilers ([#49](https://github.com/mathieubodin/scaleway-operator/issues/49)) ([0b57f40](https://github.com/mathieubodin/scaleway-operator/commit/0b57f404cf98a3194f55ad8ecaa0d9093e06b8e2))
 
+## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-29)
+
+### Bug Fixes
+
+* **lint:** remove dead code and needless returns in reconcilers ([#49](https://github.com/mathieubodin/scaleway-operator/issues/49)) ([0b57f40](https://github.com/mathieubodin/scaleway-operator/commit/0b57f404cf98a3194f55ad8ecaa0d9093e06b8e2))
 
 ### Documentation
 

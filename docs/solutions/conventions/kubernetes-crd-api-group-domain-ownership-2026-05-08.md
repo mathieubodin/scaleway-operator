@@ -28,17 +28,28 @@ tags:
 
 ## Context
 
-When building a Kubernetes operator that wraps a third-party cloud provider, the natural reflex is to use the provider's domain as the API group — for example, `scaleway.io` for a Scaleway operator. This feels coherent: the CRD kinds are named after Scaleway concepts (Instance, Project, LoadBalancer), and the provider's domain appears everywhere in the documentation.
+When building a Kubernetes operator that wraps a third-party cloud provider, the natural reflex is to use the
+provider's domain as the API group — for example, `scaleway.io` for a Scaleway operator. This feels coherent: the
+CRD kinds are named after Scaleway concepts (Instance, Project, LoadBalancer), and the provider's domain appears
+everywhere in the documentation.
 
-The problem is that `scaleway.io` is a domain owned by Scaleway SAS. Using it in an API group means every `CustomResourceDefinition`, every namespace annotation, and every finalizer string in etcd will appear to have been issued by Scaleway itself. A cluster admin seeing `scaleway.io/project-id` on a namespace assumes it was placed by official Scaleway tooling.
+The problem is that `scaleway.io` is a domain owned by Scaleway SAS. Using it in an API group means every
+`CustomResourceDefinition`, every namespace annotation, and every finalizer string in etcd will appear to have been
+issued by Scaleway itself. A cluster admin seeing `scaleway.io/project-id` on a namespace assumes it was placed by
+official Scaleway tooling.
 
-This was discovered during the PR review of the `scaleway-operator` Helm charts: the CRD group was `scaleway.io` in all Helm templates, Rust macro attributes, k8s manifests, RBAC rules, annotation constants, finalizer strings, and test assertions. The rename to `scaleway.mathieubodin.io` touched 25+ files.
+This was discovered during the PR review of the `scaleway-operator` Helm charts: the CRD group was `scaleway.io`
+in all Helm templates, Rust macro attributes, k8s manifests, RBAC rules, annotation constants, finalizer strings,
+and test assertions. The rename to `scaleway.mathieubodin.io` touched 25+ files.
 
 ## Guidance
 
 **The rule:** the Kubernetes API group for a community or personal operator must use a domain the author controls. The provider name may appear in the subdomain (e.g., `scaleway.mathieubodin.io`), but the root domain must be yours.
 
-**In kube-rs, the API group is declared once per resource type** via the `#[kube(group = "...")]` macro in `src/resources.rs`. This is the ground truth. Every other occurrence in the codebase — annotation key constants, finalizer strings, Helm chart CRDs, raw k8s manifests, RBAC `apiGroups`, test assertions — must match it exactly. Never scatter the domain string inline.
+**In kube-rs, the API group is declared once per resource type** via the `#[kube(group = "...")]` macro in
+`src/resources.rs`. This is the ground truth. Every other occurrence in the codebase — annotation key constants,
+finalizer strings, Helm chart CRDs, raw k8s manifests, RBAC `apiGroups`, test assertions — must match it exactly.
+Never scatter the domain string inline.
 
 Declare annotation and finalizer strings as typed constants in a single file so the domain is never duplicated:
 
@@ -68,7 +79,9 @@ grep -rn "scaleway\.io" \
 
 ## Why This Matters
 
-**The rename is cheap upfront and expensive after production deployments.** API group strings are stored in etcd as part of CRD names (`instances.scaleway.io`). Changing them after live custom resources exist requires creating new CRDs and migrating every existing resource — with downtime. One grep pass before the first commit costs nothing.
+**The rename is cheap upfront and expensive after production deployments.** API group strings are stored in etcd
+as part of CRD names (`instances.scaleway.io`). Changing them after live custom resources exist requires creating
+new CRDs and migrating every existing resource — with downtime. One grep pass before the first commit costs nothing.
 
 **It misleads cluster operators.** `scaleway.io/project-id` on a namespace reads as an annotation placed by official Scaleway tooling. Debugging, RBAC policies, and support escalations go wrong as a consequence.
 
@@ -76,15 +89,15 @@ grep -rn "scaleway\.io" \
 
 **It affects every layer of the stack.** In a kube-rs project the scope of a domain rename is wider than expected:
 
-| Layer | Files affected |
-|-------|---------------|
-| Rust macro | `src/resources.rs` — `#[kube(group = "...")]` on every CRD struct |
-| Rust constants | `src/context.rs`, `src/reconcilers.rs` — annotation key, finalizer string, error messages |
-| Helm charts | CRD templates (`group:`, `name:`), `clusterrole.yaml`, `namespace-bootstrap.yaml`, `NOTES.txt`, `Chart.yaml` (artifacthub annotations) |
-| k8s/ manifests | CRD files, `deployment.yaml` (RBAC), examples, test fixtures |
-| CRD metadata labels | Label keys on CRD objects — e.g., `io.scaleway.k8s.crd.schema.version` → `io.mathieubodin.scaleway.k8s.crd.schema.version` |
-| Tests | `tests/integration.rs` — assertion strings like `.contains("scaleway.io/project-id")` |
-| Docs | `README.md`, `CLAUDE.md`, `docs/solutions/` |
+|Layer|Files affected|
+|---|---|
+|Rust macro|`src/resources.rs` — `#[kube(group = "...")]` on every CRD struct|
+|Rust constants|`src/context.rs`, `src/reconcilers.rs` — annotation key, finalizer string, error messages|
+|Helm charts|CRD templates (`group:`, `name:`), `clusterrole.yaml`, `namespace-bootstrap.yaml`, `NOTES.txt`, `Chart.yaml` (artifacthub annotations)|
+|k8s/ manifests|CRD files, `deployment.yaml` (RBAC), examples, test fixtures|
+|CRD metadata labels|Label keys on CRD objects — e.g., `io.scaleway.k8s.crd.schema.version` → `io.mathieubodin.scaleway.k8s.crd.schema.version`|
+|Tests|`tests/integration.rs` — assertion strings like `.contains("scaleway.io/project-id")`|
+|Docs|`README.md`, `CLAUDE.md`, `docs/solutions/`|
 
 ## When to Apply
 
@@ -117,7 +130,7 @@ const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.io/project-id";
 const SCALEWAY_PROJECT_ANNOTATION: &str = "scaleway.mathieubodin.io/project-id";
 ```
 
-**Helm CRD template**
+### Helm CRD template
 
 ```yaml
 # Before
@@ -133,7 +146,7 @@ spec:
   group: scaleway.mathieubodin.io
 ```
 
-**RBAC ClusterRole**
+### RBAC ClusterRole
 
 ```yaml
 # Before

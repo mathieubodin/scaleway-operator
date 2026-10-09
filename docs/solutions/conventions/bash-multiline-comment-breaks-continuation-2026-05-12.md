@@ -23,7 +23,9 @@ tags:
 
 ## Context
 
-Lors de la réécriture de la section Installation du README, le plan prescrivait d'ajouter des commentaires distinctifs (`# crds`, `# operator`) aux arguments `--version` des commandes `helm upgrade` pour permettre de les distinguer si les deux charts divergeaient en version. L'implémentation initiale a utilisé la syntaxe backtick :
+Lors de la réécriture de la section Installation du README, le plan prescrivait d'ajouter des commentaires
+distinctifs (`# crds`, `# operator`) aux arguments `--version` des commandes `helm upgrade` pour permettre de les
+distinguer si les deux charts divergeaient en version. L'implémentation initiale a utilisé la syntaxe backtick :
 
 ```bash
 helm upgrade scaleway-operator-crds \
@@ -65,10 +67,10 @@ helm upgrade scaleway-operator-crds \
 
 Deux erreurs distinctes sont possibles selon la syntaxe choisie :
 
-| Syntaxe | Comportement réel |
-|---------|------------------|
-| `--version 0.1.6 # crds \` | `\` est dans le commentaire → pas de continuation → la ligne suivante est une nouvelle commande |
-| `--version 0.1.6 \`# crds\` \` | Les backticks exécutent `# crds` comme sous-commande shell (erreur silencieuse ou inattendue) |
+|Syntaxe|Comportement réel|
+|---|---|
+|`--version 0.1.6 # crds \`|`\` est dans le commentaire → pas de continuation → la ligne suivante est une nouvelle commande|
+|`--version 0.1.6 \`# crds\` \`|Les backticks exécutent `# crds` comme sous-commande shell (erreur silencieuse ou inattendue)|
 
 Ces erreurs n'apparaissent pas à la lecture mais cassent la commande si elle est copiée et exécutée telle quelle. Pour la documentation destinée à être copiée-collée, la validité bash est critique.
 

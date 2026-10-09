@@ -20,7 +20,9 @@ tags:
 
 ## Problem
 
-Dans un repo multi-package géré par release-please, `outputs.tag_name` contient le préfixe de composant : `scaleway-operator-v0.1.2`. Passé à `docker/metadata-action` avec `type=semver`, le pattern échoue à parser la chaîne (ce n'est pas un semver valide) — seul le tag `sha-xxxx` est généré. Les tags `latest` et versionnés sont absents.
+Dans un repo multi-package géré par release-please, `outputs.tag_name` contient le préfixe de composant : `scaleway-operator-v0.1.2`. Passé à `docker/metadata-action` avec `type=semver`, le pattern échoue à parser la
+chaîne (ce n'est pas un semver valide) — seul le tag `sha-xxxx` est généré. Les tags `latest` et versionnés sont
+absents.
 
 ## Symptoms
 
@@ -53,10 +55,10 @@ tags: |
   type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
 ```
 
-| Output release-please | Valeur exemple              | Usage correct                    |
-|-----------------------|-----------------------------|----------------------------------|
-| `tag_name`            | `scaleway-operator-v0.1.2`  | Référence au tag Git             |
-| `version`             | `0.1.2`                     | Semver à passer aux outils (Docker, Helm) |
+| Output release-please | Valeur exemple | Usage correct |
+| --- | --- | --- |
+| `tag_name` | `scaleway-operator-v0.1.2` | Référence au tag Git |
+| `version` | `0.1.2` | Semver à passer aux outils (Docker, Helm) |
 
 ## Why This Works
 

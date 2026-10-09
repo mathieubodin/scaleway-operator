@@ -20,14 +20,17 @@ tags:
 
 ## Problem
 
-L'endpoint `/readyz` vérifie que `last_reconcile_at` a été mis à jour dans les 60 dernières secondes. Lors du démarrage, `last_reconcile_at` est initialisé à `0`. Si aucun CR `Instance` n'existe dans le cluster, le réconciliateur ne s'exécute jamais, le timestamp reste à `0`, et `/readyz` retourne `503` indéfiniment — empêchant le pod de passer en état `Ready`.
+L'endpoint `/readyz` vérifie que `last_reconcile_at` a été mis à jour dans les 60 dernières secondes. Lors du
+démarrage, `last_reconcile_at` est initialisé à `0`. Si aucun CR `Instance` n'existe dans le cluster, le
+réconciliateur ne s'exécute jamais, le timestamp reste à `0`, et `/readyz` retourne `503` indéfiniment — empêchant le
+pod de passer en état `Ready`.
 
 ## Symptoms
 
 - `kubectl get pods` affiche `0/1 Running` pour le pod opérateur, sans crashloop.
 - `kubectl describe pod <pod>` montre :
 
-  ```
+  ```text
   Readiness probe failed: Get "http://x.x.x.x:8080/readyz": HTTP probe failed with statuscode: 503
   ```
 
@@ -44,7 +47,7 @@ Initialiser `last_reconcile_at` à `unix_now_secs()` au démarrage seul : le pod
 
 Deux corrections complémentaires dans `src/main.rs` :
 
-**1. Initialiser `last_reconcile_at` au timestamp courant au démarrage**
+### 1. Initialiser `last_reconcile_at` au timestamp courant au démarrage
 
 ```rust
 // Avant
@@ -59,7 +62,7 @@ last_reconcile_at: std::sync::atomic::AtomicI64::new(
 ),
 ```
 
-**2. Ajouter un heartbeat ticker pour maintenir le timestamp à jour**
+### 2. Ajouter un heartbeat ticker pour maintenir le timestamp à jour
 
 ```rust
 tokio::spawn({
@@ -80,7 +83,10 @@ tokio::spawn({
 
 ## Why This Works
 
-La probe `/readyz` teste la vivacité opérationnelle de la boucle de contrôle, pas uniquement la présence de workload. L'initialisation à `now` reflète le fait que l'opérateur est opérationnel dès son démarrage. Le heartbeat garantit que l'opérateur reste `Ready` tant que le process est vivant — si le process crashe, le ticker s'arrête et `/readyz` passe en `503` après 60s.
+La probe `/readyz` teste la vivacité opérationnelle de la boucle de contrôle, pas uniquement la présence de workload.
+L'initialisation à `now` reflète le fait que l'opérateur est opérationnel dès son démarrage. Le heartbeat garantit que
+l'opérateur reste `Ready` tant que le process est vivant — si le process crashe, le ticker s'arrête et `/readyz` passe
+en `503` après 60s.
 
 ## Prevention
 

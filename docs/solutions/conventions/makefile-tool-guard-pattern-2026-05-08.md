@@ -22,7 +22,10 @@ tags:
 
 ## Context
 
-In this project's Makefile, tool-availability checks follow a consistent guard pattern used for `cargo`, `kubectl`, `docker`, `helm`, and `markdownlint-cli2`. A natural first instinct is to bundle the tool check and the actual commands into a single `check-<tool>` target, then call `$(MAKE) check-<tool>` from other targets. This was initially done for `check-helm` (which ran both the guard and `helm lint`).
+In this project's Makefile, tool-availability checks follow a consistent guard pattern used for `cargo`,
+`kubectl`, `docker`, `helm`, and `markdownlint-cli2`. A natural first instinct is to bundle the tool check and
+the actual commands into a single `check-<tool>` target, then call `$(MAKE) check-<tool>` from other targets. This
+was initially done for `check-helm` (which ran both the guard and `helm lint`).
 
 During the PR review, the pattern was split to match the established convention: `check-<tool>` is a pure availability guard, and the actual commands are inlined in the calling target with `check-<tool>` as a prerequisite.
 
@@ -69,7 +72,9 @@ env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docke
 
 ## Why This Matters
 
-**Separation of concerns.** A guard answers one question: is the tool installed? Mixing in command execution makes the target do two things, which breaks the single-responsibility principle and makes it harder to use `check-<tool>` as a lightweight prerequisite without triggering side effects.
+**Separation of concerns.** A guard answers one question: is the tool installed? Mixing in command execution
+makes the target do two things, which breaks the single-responsibility principle and makes it harder to use
+`check-<tool>` as a lightweight prerequisite without triggering side effects.
 
 **Composability.** With guards as pure prerequisites, any target can declare `check-helm` as a dependency and get tool validation without running lint. The calling target controls what commands run.
 

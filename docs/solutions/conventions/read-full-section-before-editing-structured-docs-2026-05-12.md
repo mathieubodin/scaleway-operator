@@ -21,7 +21,10 @@ tags:
 
 ## Context
 
-Lors de l'implémentation des améliorations de la section Installation du README, les edits ont été appliqués séquentiellement par requirement sans relecture préalable de la section entière. L'intro a été modifiée en "Quatre étapes" avec une liste ajoutant "1. Vérifier les prérequis" — mais les sous-sections numérotées commençaient à `### 1. Installer les CRDs`. L'incohérence n'a été détectée qu'en relecture post-implémentation.
+Lors de l'implémentation des améliorations de la section Installation du README, les edits ont été appliqués
+séquentiellement par requirement sans relecture préalable de la section entière. L'intro a été modifiée en "Quatre
+étapes" avec une liste ajoutant "1. Vérifier les prérequis" — mais les sous-sections numérotées commençaient à
+`### 1. Installer les CRDs`. L'incohérence n'a été détectée qu'en relecture post-implémentation.
 
 Le bug : la liste d'intro et les sous-sections numérotées sont deux représentations du même séquençage — modifier l'une sans avoir la vue d'ensemble de l'autre produit des incohérences silencieuses.
 
@@ -35,7 +38,10 @@ Avant de commencer le premier edit sur une section de documentation avec des sou
 
 ## Why This Matters
 
-Les sections de documentation bien structurées ont des invariants implicites : une liste d'intro décrit exactement les sous-sections qui suivent, les références ("voir étape 4") pointent vers des sous-sections existantes, les comptes ("Quatre étapes") correspondent au nombre de sous-sections numérotées. Ces invariants ne sont visibles qu'avec la vue d'ensemble — pas en lisant un seul paragraphe pour un edit isolé.
+Les sections de documentation bien structurées ont des invariants implicites : une liste d'intro décrit exactement
+les sous-sections qui suivent, les références ("voir étape 4") pointent vers des sous-sections existantes, les
+comptes ("Quatre étapes") correspondent au nombre de sous-sections numérotées. Ces invariants ne sont visibles qu'avec
+la vue d'ensemble — pas en lisant un seul paragraphe pour un edit isolé.
 
 Sans cette relecture préalable, des incohérences comme une liste à 4 items décrivant 3 étapes (ou inversement) passent inaperçues jusqu'à la relecture finale.
 
@@ -51,7 +57,7 @@ Ne s'applique pas aux edits ponctuels d'une phrase isolée sans dépendance stru
 
 ### Situation typique (README Installation)
 
-```
+```markdown
 ## Installation
 
 Trois étapes :              ← liste d'intro

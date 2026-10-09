@@ -1,0 +1,150 @@
+name: Create milestone prep reminder on milestone close
+
+on:
+  milestone:
+    types: [closed]
+
+# À la fermeture d'un milestone, crée une issue de rappel "chore: préparer milestone M<N>"
+# avec un résumé du Backlog restant par axe et priorité.
+# L'issue est automatiquement ajoutée au Project v2 par auto-add-to-project.yml.
+#
+# Requiert le secret GH_PROJECT_TOKEN — classic PAT avec scope `project`.
+
+jobs:
+  create-reminder:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+      PROJECT_ID: PVT_kwHOAAJUjc4BYpzh
+      STATUS_FIELD_ID: PVTSSF_lAHOAAJUjc4BYpzhzhTuEok
+      BACKLOG_OPTION_ID: f75ad846
+      AXIS_FIELD_ID: PVTSSF_lAHOAAJUjc4BYpzhzhT6_28
+      PRIORITY_FIELD_ID: PVTSSF_lAHOAAJUjc4BYpzhzhT6_3A
+    steps:
+      - name: Check token availability
+        id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::GH_PROJECT_TOKEN secret not configured — workflow skipped."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          elif ! gh api user --silent 2>/dev/null; then
+            echo "::error::GH_PROJECT_TOKEN is expired or invalid — renew the PAT and update the Actions secret."
+            exit 1
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next milestone number
+        if: steps.token.outputs.available == 'true'
+        id: next_n
+        run: |
+          MAX=$(gh api "repos/${{ github.repository }}/milestones" \
+            --paginate --state all \
+            --jq '[.[].number] | if length == 0 then 0 else max end')
+          echo "n=$((MAX + 1))" >> "$GITHUB_OUTPUT"
+
+      - name: Read Backlog issues from Project v2
+        if: steps.token.outputs.available == 'true'
+        id: backlog
+        run: |
+          ITEMS=$(gh api graphql -f query=<<'QUERY'
+          query($projectId: ID!, $statusFieldId: ID!, $backlogOptionId: String!) {
+            node(id: $projectId) {
+              ... on ProjectV2 {
+                items(first: 100) {
+                  nodes {
+                    content {
+                      ... on Issue {
+                        number
+                        title
+                        milestone { title }
+                      }
+                    }
+                    fieldValueByName(name: "Status") {
+                      ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                    }
+                    axis: fieldValueByName(name: "Axis") {
+                      ... on ProjectV2ItemFieldSingleSelectValue { name }
+                    }
+                    priority: fieldValueByName(name: "Priority") {
+                      ... on ProjectV2ItemFieldSingleSelectValue { name }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          QUERY
+          -f projectId="$PROJECT_ID" \
+          -f statusFieldId="$STATUS_FIELD_ID" \
+          -f backlogOptionId="$BACKLOG_OPTION_ID")
+
+          SUMMARY=$(echo "$ITEMS" | jq -r '
+            .data.node.items.nodes
+            | map(select(
+                .content != null
+                and (.fieldValueByName.optionId == "f75ad846")
+                and (.content.milestone == null)
+              ))
+            | group_by(.axis.name // "Sans axe")
+            | map({
+                axis: (.[0].axis.name // "Sans axe"),
+                issues: (. | group_by(.priority.name // "?")
+                  | map({
+                      priority: (.[0].priority.name // "?"),
+                      count: length
+                    })
+                  | sort_by(.priority)
+                )
+              })
+            | if length == 0 then
+                "Backlog vide — aucune issue en attente."
+              else
+                .[] | "**\(.axis)**\n" + (.issues[] | "  - \(.priority) : \(.count) issue(s)") + "\n"
+              end
+          ')
+
+          COUNT=$(echo "$ITEMS" | jq '
+            .data.node.items.nodes
+            | map(select(
+                .content != null
+                and (.fieldValueByName.optionId == "f75ad846")
+                and (.content.milestone == null)
+              ))
+            | length
+          ')
+
+          echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$SUMMARY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Create reminder issue
+        if: steps.token.outputs.available == 'true'
+        run: |
+          CLOSED_MILESTONE="${{ github.event.milestone.title }}"
+          NEXT_N="${{ steps.next_n.outputs.n }}"
+          COUNT="${{ steps.backlog.outputs.count }}"
+          SUMMARY="${{ steps.backlog.outputs.summary }}"
+
+          BODY="## Milestone fermé : ${CLOSED_MILESTONE}
+
+          Il est temps de composer le milestone **M${NEXT_N}**.
+
+          ## Backlog restant (${COUNT} issue(s) non assignées)
+
+          ${SUMMARY}
+
+          ---
+
+          Pour préparer le milestone, ouvrir une session Claude Code et demander :
+          \`prépare le milestone M${NEXT_N}\`
+
+          Voir [CONTRIBUTING.md — Process de préparation de milestone](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md#process-de-préparation-de-milestone) pour les instructions complètes."
+
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "chore: préparer milestone M${NEXT_N}" \
+            --body "$BODY"

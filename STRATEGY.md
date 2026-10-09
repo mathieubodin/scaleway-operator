@@ -7,7 +7,11 @@ last_updated: 2026-05-24
 
 ## Problème cible
 
-Les équipes ops/platform qui gèrent de l'infrastructure Scaleway s'appuient sur Terraform, mais son modèle d'état externe crée des incohérences entre plan et apply, un tfstate fragile, et des providers en retard sur l'API — en plus d'introduire une dépendance tierce à risque supply-chain. Le nœud du problème : l'état souhaité vit en dehors du cluster, dans un outil avec son propre langage et ses propres modes de défaillance, alors que le cluster dispose déjà d'une primitive de réconciliation d'état éprouvée.
+Les équipes ops/platform qui gèrent de l'infrastructure Scaleway s'appuient sur Terraform, mais son modèle d'état externe crée
+des incohérences entre plan et apply, un tfstate fragile, et des providers en retard sur l'API — en plus d'introduire une
+dépendance tierce à risque supply-chain. Le nœud du problème : l'état souhaité vit en dehors du cluster, dans un outil avec
+son propre langage et ses propres modes de défaillance, alors que le cluster dispose déjà d'une primitive de réconciliation
+d'état éprouvée.
 
 ## Notre approche
 
@@ -17,7 +21,9 @@ Remplacer Terraform par un opérateur Kubernetes natif comme mécanisme de gesti
 
 **Cible principale :** Ops/platform engineers responsables de l'infrastructure Scaleway — ils confient à l'opérateur la gestion déclarative des ressources cloud depuis leur cluster, sans toolchain séparée ni gestion manuelle d'état.
 
-**Cible secondaire (mainteneur) :** développeur solo travaillant en mode IA-assisté agentique. Le projet sert simultanément de produit opérateur production-ready et de terrain d'expérimentation pour valider des pratiques de développement IA-assisté sur du code Rust système (kube-rs, async, observabilité).
+**Cible secondaire (mainteneur) :** développeur solo travaillant en mode IA-assisté agentique. Le projet sert simultanément
+de produit opérateur production-ready et de terrain d'expérimentation pour valider des pratiques de développement IA-assisté
+sur du code Rust système (kube-rs, async, observabilité).
 
 ## Méthode
 
