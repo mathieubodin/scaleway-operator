@@ -364,6 +364,9 @@ done
 Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, depuis le shell.
 En fin de PR, l'agent renseigne ce champ pour chaque issue liée par `Closes #N`. La dernière valeur l'emporte.
 
+Le chiffre retenu est le total hors relectures de cache : texte produit, contexte nouvellement lu et tokens des sous-agents.
+Les relectures du cache, relues à chaque tour, gonflent le compteur sans refléter le travail accompli.
+
 ```bash
 # ITEM_ID : identifiant de l'issue sur le board
 ITEM_ID=$(gh project item-list 2 --owner mathieubodin --limit 300 --format json \
