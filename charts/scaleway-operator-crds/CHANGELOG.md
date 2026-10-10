@@ -2,6 +2,12 @@
 
 User-facing changes to the `scaleway-operator-crds` chart. The chart is versioned with the operator: a version without an entry below only follows an operator release.
 
+## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.13...scaleway-operator-crds-v0.1.14) (2026-10-10)
+
+### Features
+
+* **scaleway-secret:** add `status.observed_generation` to the `ScalewaySecret` CRD ([#127](https://github.com/mathieubodin/scaleway-operator/issues/127))
+
 ## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.12...scaleway-operator-crds-v0.1.13) (2026-10-09)
 
 ### Features

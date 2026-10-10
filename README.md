@@ -61,7 +61,7 @@ Ces étapes nécessitent des droits cluster-admin (ou équivalent) sur le cluste
 ```bash
 helm upgrade scaleway-operator-crds \
     oci://ghcr.io/mathieubodin/charts/scaleway-operator-crds \
-    --version 0.1.13 \
+    --version 0.1.14 \
     --namespace scaleway-system \
     --create-namespace \
     --install  # crds

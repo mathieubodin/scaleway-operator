@@ -2,6 +2,19 @@
 
 User-facing changes to the operator binary and its container image. Chart changes are in `charts/*/CHANGELOG.md`.
 
+## [0.1.15](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.14...scaleway-operator-v0.1.15) (2026-10-10)
+
+### Bug Fixes
+
+* **scaleway-secret:** push a new version when the `ScalewaySecret` spec changes, for instance the key read from the source Secret ([#127](https://github.com/mathieubodin/scaleway-operator/issues/127))
+* **scaleway-secret:** pick up a fix made on the source Secret (opt-in label, missing key, RBAC) within 5 minutes, without touching the `ScalewaySecret` ([#128](https://github.com/mathieubodin/scaleway-operator/issues/128))
+* **scaleway-secret:** keep a single enabled version in Scaleway Secret Manager, even when a status update is lost after a push ([#117](https://github.com/mathieubodin/scaleway-operator/issues/117))
+* retry transient Kubernetes API errors when reading the namespace credentials, instead of waiting for a change of the resource ([#128](https://github.com/mathieubodin/scaleway-operator/issues/128))
+
+### Upgrade notes
+
+* Upgrade the `scaleway-operator-crds` chart to 0.1.14 before the operator: the `ScalewaySecret` status gains the `observed_generation` field.
+
 ## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.13...scaleway-operator-v0.1.14) (2026-10-09)
 
 ### Features
