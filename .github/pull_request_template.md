@@ -12,4 +12,4 @@ Closes #
 - [ ] `make check` vert
 - [ ] `/ce-compound` lancé, résultat ajouté à la PR
 
-<!-- En fin de PR, l'agent renseigne le champ Tokens des issues liées sur le Project GitHub. -->
+<!-- Le champ Tokens des issues liées est renseigné par le hook de relevé ; sinon lancer `make report-tokens`. -->
