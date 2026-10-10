@@ -87,12 +87,13 @@ Pour reproduire localement les vérifications CI, voir la section [Commandes de 
 (`make coverage-text`, `make coverage`, `make test-integration-kind`) et la section [Tests d'intégration](#tests-dintégration)
 pour le détail du déploiement kind utilisé par le job d'intégration.
 
-Trois workflows GitHub Actions s'exécutent automatiquement :
+Quatre workflows GitHub Actions s'exécutent automatiquement :
 
 | Workflow | Déclencheur | Jobs |
 | --- | --- | --- |
 | `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
 | `integration.yml` | Toute PR vers `main`, et push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `pr-metadata.yml` | Toute PR vers `main`, et chaque changement de ses métadonnées | `pr-metadata` (issue référencée, milestone, label, personne assignée) |
 | `release.yml` | Release publiée | `image` (tags `scaleway-operator-v*`), `chart` (tags `scaleway-operator-chart-v*` et `scaleway-operator-crds-v*`) |
 
 Le gate de merge repose sur deux required status checks :
@@ -100,7 +101,10 @@ Le gate de merge repose sur deux required status checks :
 - `lint` — `make check` doit passer (cargo fmt + clippy + markdownlint)
 - `unit-tests` — tests unitaires + couverture générée
 
-Deux contrôles sont informatifs, sans bloquer le merge :
+Trois contrôles sont informatifs, sans bloquer le merge :
+
+- `pr-metadata` — la PR référence une issue (`Closes #N` ou `Refs #N`) et porte un milestone, un label et une personne
+  assignée. Les PRs Dependabot et les PRs de release en sont dispensées
 
 - `integration-tests` — tests d'intégration sur un cluster kind éphémère
 - `codecov/patch` — patch coverage ≥ 80 %, publié par l'application GitHub Codecov avec un commentaire
