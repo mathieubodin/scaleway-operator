@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind release-prepare release-publish
+.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind release-prepare release-publish report-tokens
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -115,6 +115,15 @@ check-npx:
 		exit 1; \
 	}
 
+check-jq:
+	@command -v jq >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "Error: jq not found. Install with:"; \
+		echo "  https://jqlang.org/download/"; \
+		echo ""; \
+		exit 1; \
+	}
+
 env-check: check-cargo check-llvm-cov check-kubectl check-kubeconfig check-docker check-kind check-helm check-markdownlint ## Teste la conformite de l'environnement
 	@echo ""
 	@echo "Environment pass the check list"
@@ -134,6 +143,9 @@ release-prepare: check-gh check-npx ## Ouvre ou met à jour la PR de release et 
 
 release-publish: check-gh check-npx ## Crée tags et releases de la PR de release mergée, si les tests d'intégration sont verts
 	bash scripts/release-publish.sh
+
+report-tokens: check-gh check-jq ## Reporte les tokens produits pour une PR dans le Project (PR=<numéro>, branche courante par défaut)
+	bash scripts/report-tokens.sh $(PR)
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	mkdir -p $(COVERAGE_DIR)

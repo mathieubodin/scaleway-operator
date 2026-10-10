@@ -225,45 +225,6 @@ gh auth refresh -s project
 gh auth status
 ```
 
-### Token tracking git
-
-Chaque commit produit pendant une session Claude Code porte automatiquement trois trailers :
-
-```text
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
-
-Claude-Session: 5db07156
-Claude-Tokens-Delta: 4200
-Claude-Tokens-Total: 18700
-```
-
-L'injection passe par `git interpret-trailers`, qui garantit que les trailers `Claude-*` forment toujours un bloc final parseable
-par `git log --format='%(trailers:...)'` — y compris quand le message contient des footers GitHub sans deux-points (`Closes #7`)
-qui ne sont pas des trailers valides au sens git.
-
-**Activation** — exécuter une fois après le clonage :
-
-```bash
-bash scripts/setup-dev.sh
-```
-
-Le script copie les hooks vers `~/.claude/hooks/`, les enregistre dans `~/.claude/settings.json`, et crée le symlink `.git/hooks/prepare-commit-msg`. Les hooks sont actifs au prochain démarrage de Claude Code.
-
-**Requêtes utiles :**
-
-```bash
-# Coût total en tokens d'une feature (tous les commits de la branche)
-git log --format='%(trailers:key=Claude-Tokens-Delta,valueonly)' | awk 'NF{s+=$1} END{print s}'
-
-# Coût par commit (sujet + delta)
-git log --format='%s%n%(trailers:key=Claude-Tokens-Delta,valueonly)'
-```
-
-**Limitation connue :** `git commit --amend -m "..."` n'est pas détectable comme amend par le hook
-(`prepare-commit-msg` reçoit `source=message`). Le hook réinjecte alors des trailers frais et le `Claude-Tokens-Delta`
-du commit remplacé est perdu (sous-comptage). Pendant une session, préférer `git commit --amend` sans `-m`
-(l'amend est alors détecté et les trailers existants conservés).
-
 ### Project Field IDs
 
 Ces IDs servent aux opérations lancées depuis le shell et aux sessions de préparation de milestone.
@@ -368,22 +329,40 @@ done
 
 ### Convention `/cost N`
 
-Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, depuis le shell.
-En fin de PR, l'agent renseigne ce champ pour chaque issue liée par `Closes #N`. La dernière valeur l'emporte.
+Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, sur chaque issue liée par `Closes #N`.
 
-Le chiffre retenu est le total hors relectures de cache : texte produit, contexte nouvellement lu et tokens des sous-agents.
-Les relectures du cache, relues à chaque tour, gonflent le compteur sans refléter le travail accompli.
+**Chiffre retenu : les tokens produits par l'assistant**, sous-agents compris. Les tokens de cache sont exclus :
+ils dépendent des pauses dans la session, pas du travail accompli. Après une heure d'inactivité, toute la conversation
+est remise en cache d'un coup, ce qui multiplierait le coût apparent d'une PR par cinq sans rien changer à son contenu.
 
-```bash
-# ITEM_ID : identifiant de l'issue sur le board
-ITEM_ID=$(gh project item-list 2 --owner mathieubodin --limit 300 --format json \
-  --jq '.items[] | select(.content.number == 42) | .id')
+**Relevé automatique.** `scripts/report-tokens.sh` lit le journal de la session Claude Code, calcule le chiffre et écrit le champ.
+Un hook Claude Code le lance après chaque `gh pr create` et chaque `git push` : la dernière valeur l'emporte, et le champ
+est à jour au moment du merge. Le hook se déclare dans `.claude/settings.json` :
 
-gh project item-edit --project-id PVT_kwHOAAJUjc4BYpzh --id "$ITEM_ID" \
-  --field-id PVTF_lAHOAAJUjc4BYpzhzhT6_3I --number 12500
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/report-tokens.sh --hook" }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-Le mainteneur peut demander la même chose à l'agent en écrivant `/cost 12500` dans la session.
+**Relevé manuel**, pour une PR ouverte hors session ou pour corriger une valeur :
+
+```bash
+make report-tokens PR=42
+```
+
+**Attribution.** Une PR reçoit les tokens produits depuis le dernier relevé de la PR précédente dans la même session.
+Une discussion sans rapport, tenue entre deux PRs, est donc comptée sur la suivante. Le repère est gardé dans
+`.git/claude-token-report.json`, non versionné. Une PR travaillée sur plusieurs sessions cumule leurs relevés.
 
 ## Style de code
 
