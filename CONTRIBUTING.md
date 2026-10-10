@@ -213,6 +213,15 @@ Le suivi du board repose sur les automatisations natives du Project GitHub, rég
 | Pull request linked to issue | Status « Review » dès qu'une PR référence l'issue avec `Closes #N` |
 | Item closed | Status « Done », à la fermeture de l'issue par le merge de la PR |
 
+**Les PRs sont aussi dans le Project**, pour que chacune affiche son projet, son milestone et ses labels.
+GitHub ne recopie rien de l'issue vers la PR : `scripts/sync-pr-metadata.sh` s'en charge à l'ouverture de la PR,
+lancé par le même hook que le relevé des tokens, ou à la main avec `make sync-pr-metadata PR=<numéro>`.
+Il recopie le milestone, les labels, Axis, Priority et Effort de l'issue liée, et assigne la PR au mainteneur.
+L'issue liée est celle que la PR ferme par `Closes #N`, ou à défaut la première qu'elle cite par `Refs #N`.
+
+Pour qu'une PR et son issue ne fassent pas doublon, les vues du board et les graphiques Insights filtrent sur `is:issue`.
+Toute nouvelle vue ou tout nouveau graphique doit porter ce filtre, sauf la vue « Pull requests », filtrée sur `is:pr`.
+
 Ne jamais passer une issue ouverte en « Done » à la main : l'automatisation « Auto-close issue » la fermerait.
 Si une PR est liée à son issue après son ouverture et que le Status ne bouge pas, lier l'issue depuis la section
 « Development » de la PR.
@@ -235,7 +244,7 @@ Ces IDs servent aux opérations lancées depuis le shell et aux sessions de pré
 | Axis | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_28` | `2b5337ce` Couverture API Scaleway · `2de5cc1d` Fiabilité de l'opérateur · `7682f8cd` Extensibilité · `ad58ffc2` Mise en place et documentation · `baa066a1` Outillage IA agentique |
 | Priority | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3A` | `43a64d76` P0 · `1ba4b43d` P1 · `774f2cde` P2 · `7e16a61a` P3 |
 | Effort | `PVTSSF_lAHOAAJUjc4BYpzhzhT6_3E` | `866f0c5e` S · `6a811477` M · `55fdce43` L · `d4427b50` XL |
-| Tokens | `PVTF_lAHOAAJUjc4BYpzhzhT6_3I` | champ numérique, renseigné depuis le shell en fin de PR |
+| Tokens | `PVTF_lAHOAAJUjc4BYpzhzhT6_3I` | champ numérique, renseigné sur les PRs par `scripts/report-tokens.sh` |
 | Milestone | `PVTF_lAHOAAJUjc4BYpzhzhTuEow` | champ natif GitHub — auto-propagé à l'assignation d'une issue à un milestone |
 
 **PROJECT_ID** : `PVT_kwHOAAJUjc4BYpzh`
@@ -329,7 +338,12 @@ done
 
 ### Convention `/cost N`
 
-Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, sur chaque issue liée par `Closes #N`.
+Le coût en tokens IA d'une PR est reporté dans le champ **Tokens** du Project GitHub, sur l'élément de la PR elle-même :
+c'est le champ affiché dans le panneau « Projects » de la PR. La vue « Pull requests » du Project les liste toutes.
+
+Le coût est porté par la PR et non par l'issue : une PR qui ferme plusieurs issues n'est comptée qu'une fois,
+et une issue traitée par plusieurs PRs ne perd aucun relevé. Milestone et Axis étant recopiés sur la PR,
+les coûts s'additionnent par milestone ou par axe sans passer par les issues.
 
 **Chiffre retenu : les tokens produits par l'assistant**, sous-agents compris. Les tokens de cache sont exclus :
 ils dépendent des pauses dans la session, pas du travail accompli. Après une heure d'inactivité, toute la conversation

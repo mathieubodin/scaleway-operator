@@ -41,7 +41,9 @@ Board : <https://github.com/users/mathieubodin/projects/2>
 - Toute feature : une issue parent plus une sous-issue par unité d'implémentation (U1…Un).
 - Toute PR référence son issue avec `Closes #N`. Les automatisations natives du Project font suivre
   le Status : « Review » à la liaison, « Done » à la fermeture. Ne jamais passer une issue ouverte en « Done » à la main.
-- Le champ `Tokens` des issues liées est renseigné par un hook après chaque `gh pr create` et `git push`.
+- À l'ouverture d'une PR, un hook lui recopie milestone, labels et Project de son issue.
+  Si le hook n'est pas actif, lancer `make sync-pr-metadata`.
+- Le champ `Tokens` de la PR, dans le Project, est renseigné par un hook après chaque `gh pr create` et `git push`.
   Si le hook n'est pas actif, lancer `make report-tokens`. Détail : CONTRIBUTING.md, section Convention `/cost N`.
 - Après chaque merge `feat` ou `fix` sur `main`, proposer une release : `make release-prepare`, merge de la PR
   de release, puis `make release-publish`. Détail : CONTRIBUTING.md, section Publier une release.
