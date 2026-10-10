@@ -1,3 +1,4 @@
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -57,6 +58,11 @@ pub enum OperatorError {
     #[error("Secret key not found: {0}")]
     SecretKeyNotFound(String),
 
+    /// L'opérateur n'a pas le droit de lire les Secrets du namespace (RBAC).
+    /// Erreur permanente — résolue en bootstrappant le namespace, sans toucher au CR.
+    #[error("Secret access denied: {0}")]
+    SecretAccessDenied(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 
@@ -65,6 +71,9 @@ pub enum OperatorError {
 }
 
 pub type Result<T> = std::result::Result<T, OperatorError>;
+
+/// Fréquence de revérification du Secret source après une erreur permanente côté source.
+pub const SOURCE_RECHECK_INTERVAL: Duration = Duration::from_secs(300);
 
 impl OperatorError {
     /// Returns the PascalCase variant name for use as a Prometheus label.
@@ -86,6 +95,7 @@ impl OperatorError {
             OperatorError::SecretSourceNotConfigured(_) => "SecretSourceNotConfigured",
             OperatorError::SecretOptInMissing(_) => "SecretOptInMissing",
             OperatorError::SecretKeyNotFound(_) => "SecretKeyNotFound",
+            OperatorError::SecretAccessDenied(_) => "SecretAccessDenied",
             OperatorError::Unknown(_) => "Unknown",
             OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
@@ -105,13 +115,50 @@ impl OperatorError {
                 | OperatorError::SecretSourceNotConfigured(_)
                 | OperatorError::SecretOptInMissing(_)
                 | OperatorError::SecretKeyNotFound(_)
+                | OperatorError::SecretAccessDenied(_)
         )
+    }
+
+    /// Délai avant de revérifier une erreur permanente dont la correction ne passe pas par
+    /// le CR : le Secret source ou son RBAC. Le controller ne surveille pas les Secrets,
+    /// donc sans revérification la correction ne serait jamais vue.
+    pub fn recheck_interval(&self) -> Option<Duration> {
+        match self {
+            OperatorError::SecretOptInMissing(_)
+            | OperatorError::SecretKeyNotFound(_)
+            | OperatorError::SecretAccessDenied(_) => Some(SOURCE_RECHECK_INTERVAL),
+            _ => None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_recheck_interval_only_for_source_side_errors() {
+        for err in [
+            OperatorError::SecretOptInMissing("x".to_string()),
+            OperatorError::SecretKeyNotFound("x".to_string()),
+            OperatorError::SecretAccessDenied("x".to_string()),
+        ] {
+            assert!(err.is_permanent_error(), "{err:?}");
+            assert_eq!(
+                err.recheck_interval(),
+                Some(SOURCE_RECHECK_INTERVAL),
+                "{err:?}"
+            );
+        }
+        // Corrigées en éditant le CR ou le namespace : un événement relance la réconciliation.
+        for err in [
+            OperatorError::ConfigError("x".to_string()),
+            OperatorError::SecretSourceNotConfigured("x".to_string()),
+            OperatorError::SecretNotFound("x".to_string()),
+        ] {
+            assert_eq!(err.recheck_interval(), None, "{err:?}");
+        }
+    }
 
     #[test]
     fn test_for_status_scaleway_error_extracts_message_field() {
