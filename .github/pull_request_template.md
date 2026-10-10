@@ -12,4 +12,4 @@ Closes #
 - [ ] `make check` vert
 - [ ] `/ce-compound` lancé, résultat ajouté à la PR
 
-<!-- Le champ Tokens des issues liées est renseigné par le hook de relevé ; sinon lancer `make report-tokens`. -->
+<!-- Le champ Tokens de la PR, dans le Project, est renseigné par le hook de relevé ; sinon lancer `make report-tokens`. -->
