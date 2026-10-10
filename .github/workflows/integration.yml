@@ -1,9 +1,14 @@
 name: Integration
 
-# Tests d'intégration sur chaque push main. `make release-publish` exige leur succès
-# sur le commit de merge de la PR de release avant de créer tags et releases.
+# Tests d'intégration sur chaque PR et chaque push main.
+# Sur une PR, leur couverture rejoint celle des tests unitaires dans le rapport Codecov.
+# Sur main, `make release-publish` exige leur succès sur le commit de merge de la PR
+# de release avant de créer tags et releases.
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
@@ -47,6 +52,8 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        # Secrets unavailable on fork PRs — upload is best-effort, never blocks the job
+        if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           files: target/llvm-cov/lcov.info
           flags: integration
