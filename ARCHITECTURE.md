@@ -68,14 +68,18 @@ Il n'a pas de zone mais une région, et sa source vit dans le cluster.
 6. ajouter finalizer     → requeue 5s
 7. créer ou adopter      → recherche par tags opérateur (namespace et nom du CR), création sinon, puis première version
 8. rotation              → nouvelle version si le resourceVersion du Secret source a changé
-                           ou si le spec du CR a changé (status.observed_generation),
-                           puis désactivation best-effort de la version précédente
+                           ou si le spec du CR a changé (status.observed_generation) ;
+                           Scaleway désactive la version précédente dans le même appel
 9. requeue 30s           → détection de la prochaine rotation
 ```
 
 Le `status` ne contient jamais de dérivé de la valeur : la rotation est détectée par le `metadata.resourceVersion`
 du Secret source. Le compromis est documenté dans
 [`docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md`](docs/solutions/architecture-patterns/scaleway-secret-resource-version-rotation-detection-2026-06-13.md).
+
+Une seule version reste active. L'envoi d'une version et la mise à jour du status ne sont pas atomiques : si la seconde
+échoue, le tour suivant renvoie une version. Chaque création passe donc `disable_previous` à Scaleway, qui désactive la
+version précédente, connue ou non du status.
 
 ### Opt-in du Secret source
 
