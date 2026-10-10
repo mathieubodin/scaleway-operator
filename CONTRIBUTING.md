@@ -213,6 +213,14 @@ Le suivi du board repose sur les automatisations natives du Project GitHub, rég
 | Pull request linked to issue | Status « Review » dès qu'une PR référence l'issue avec `Closes #N` |
 | Item closed | Status « Done », à la fermeture de l'issue par le merge de la PR |
 
+**Les PRs sont aussi dans le Project**, pour que chacune affiche son projet, son milestone et ses labels.
+GitHub ne recopie rien de l'issue vers la PR : `scripts/sync-pr-metadata.sh` s'en charge à l'ouverture de la PR,
+lancé par le même hook que le relevé des tokens, ou à la main avec `make sync-pr-metadata PR=<numéro>`.
+Il recopie le milestone, les labels, Axis, Priority et Effort de l'issue liée, et assigne la PR au mainteneur.
+
+Pour qu'une PR et son issue ne fassent pas doublon, les vues du board et les graphiques Insights filtrent sur `is:issue`.
+Toute nouvelle vue ou tout nouveau graphique doit porter ce filtre.
+
 Ne jamais passer une issue ouverte en « Done » à la main : l'automatisation « Auto-close issue » la fermerait.
 Si une PR est liée à son issue après son ouverture et que le Status ne bouge pas, lier l'issue depuis la section
 « Development » de la PR.

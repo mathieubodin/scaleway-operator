@@ -12,6 +12,7 @@
 # Usage :
 #   scripts/report-tokens.sh [PR]     relevé manuel (PR de la branche courante par défaut)
 #   scripts/report-tokens.sh --hook   appelé par un hook PostToolUse de Claude Code
+#                                     (lance aussi sync-pr-metadata.sh après `gh pr create`)
 set -euo pipefail
 
 PROJECT_OWNER="mathieubodin"
@@ -37,6 +38,10 @@ if [ "${1:-}" = "--hook" ]; then
         *) exit 0 ;;
     esac
     transcript=$(jq -r '.transcript_path // ""' <<<"$input")
+    # À l'ouverture d'une PR, lui recopier d'abord les métadonnées de son issue.
+    case "$command" in
+        *"gh pr create"*) bash scripts/sync-pr-metadata.sh || true ;;
+    esac
 else
     pr="${1:-}"
 fi
