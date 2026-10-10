@@ -1,20 +1,25 @@
-/// Tests d'intégration pour reconcile_instance.
+use k8s_openapi::api::core::v1::Secret;
+/// Tests d'intégration des reconcilers.
 ///
 /// Exécution : `make test-integration-kind` (crée un cluster kind éphémère)
 ///
-/// Les namespaces, NamespaceRoles et Secrets sont pré-créés par `k8s/test-fixtures.yaml`.
-/// Les tests ne créent que des objets Instance (et les suppriment en fin de test).
+/// Les namespaces, NamespaceRoles et Secrets IAM sont pré-créés par `k8s/test-fixtures.yaml`.
+/// Les tests créent leurs propres ressources (Instance, ScalewaySecret et Secret source)
+/// et les suppriment en fin de test.
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::ByteString;
 use kube::api::{DeleteParams, Patch, PatchParams, PostParams};
 use kube::{Api, Client};
 use scaleway_operator::{
     context::Context,
+    error::OperatorError,
     resources::{
         Instance, InstanceSpec, InstanceStatus, KubernetesSecretRef, LoadBalancer,
-        LoadBalancerSpec, ScalewaySecret, ScalewaySecretSpec, SecretSource,
+        LoadBalancerSpec, ScalewaySecret, ScalewaySecretSpec, ScalewaySecretStatus, SecretSource,
     },
     scaleway::ScalewayClient,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // ── Namespaces pré-créés par k8s/test-fixtures.yaml ──────────────────────────
@@ -34,16 +39,10 @@ const NS_EDITOR: &str = "scw-test-editor";
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const SECRET_FINALIZER: &str = "scaleway.mathieubodin.io/secret-finalizer";
 
-// ── Noms des Secrets K8s pré-créés par k8s/test-fixtures.yaml (issue #118) ──
-/// Secret K8s avec label opt-in + annotation OK + clé "password" présente.
-/// Réservé au test happy path (`test_scalewaysecret_create_with_mock_scaleway_writes_status`,
-/// `unimplemented!()` — voir #118).
-#[allow(dead_code)]
-const KS_SECRET_OPTED_IN: &str = "scw-test-secret-opted-in";
-/// Secret K8s sans label opt-in → SecretOptInMissing permanent.
-const KS_SECRET_NO_OPTIN: &str = "scw-test-secret-no-optin";
-/// Secret K8s opt-in OK mais clé "password" absente → SecretKeyNotFound permanent.
-const KS_SECRET_WRONG_KEY: &str = "scw-test-secret-wrong-key";
+const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
+const ALLOWED_CR_ANNOTATION: &str = "scaleway.mathieubodin.io/allowed-cr";
+/// Chemin de l'API Secret Manager pour la région des tests.
+const SECRETS_PATH: &str = "/secret-manager/v1beta1/regions/fr-par/secrets";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -177,6 +176,17 @@ impl TestFixture {
         k8s_secret_name: &str,
         key: &str,
     ) -> ScalewaySecret {
+        self.create_scaleway_secret_in_region(name, k8s_secret_name, key, "fr-par")
+            .await
+    }
+
+    pub async fn create_scaleway_secret_in_region(
+        &self,
+        name: &str,
+        k8s_secret_name: &str,
+        key: &str,
+        region: &str,
+    ) -> ScalewaySecret {
         let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
         let obj = ScalewaySecret {
             metadata: ObjectMeta {
@@ -187,7 +197,7 @@ impl TestFixture {
             },
             spec: ScalewaySecretSpec {
                 name: name.to_string(),
-                region: "fr-par".to_string(),
+                region: region.to_string(),
                 source: SecretSource {
                     kubernetes_secret: Some(KubernetesSecretRef {
                         name: k8s_secret_name.to_string(),
@@ -219,6 +229,88 @@ impl TestFixture {
             )
             .await;
         let _ = api.delete(name, &DeleteParams::default()).await;
+    }
+
+    /// Crée le Secret K8s source d'un ScalewaySecret, avec la clé `key`.
+    /// `opt_in` pose le label et l'annotation qui autorisent le CR `cr_name` à le lire.
+    /// Retourne son nom et son resourceVersion.
+    pub async fn create_source_secret(
+        &self,
+        cr_name: &str,
+        key: &str,
+        opt_in: bool,
+    ) -> (String, String) {
+        let api: Api<Secret> = Api::namespaced(self.client.clone(), self.ns);
+        let name = format!("{}-src", cr_name);
+        let (labels, annotations) = if opt_in {
+            (
+                Some(BTreeMap::from([(
+                    OPT_IN_LABEL.to_string(),
+                    "true".to_string(),
+                )])),
+                Some(BTreeMap::from([(
+                    ALLOWED_CR_ANNOTATION.to_string(),
+                    format!("{}/{}", self.ns, cr_name),
+                )])),
+            )
+        } else {
+            (None, None)
+        };
+        let obj = Secret {
+            metadata: ObjectMeta {
+                name: Some(name.clone()),
+                namespace: Some(self.ns.to_string()),
+                labels,
+                annotations,
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([(
+                key.to_string(),
+                ByteString(b"s3cr3t".to_vec()),
+            )])),
+            ..Default::default()
+        };
+        let created = api
+            .create(&PostParams::default(), &obj)
+            .await
+            .unwrap_or_else(|e| panic!("create_source_secret({}) failed: {}", name, e));
+        let rv = created
+            .metadata
+            .resource_version
+            .expect("source secret has a resourceVersion");
+        (name, rv)
+    }
+
+    pub async fn cleanup_source_secret(&self, name: &str) {
+        let api: Api<Secret> = Api::namespaced(self.client.clone(), self.ns);
+        let _ = api.delete(name, &DeleteParams::default()).await;
+    }
+
+    /// Écrit le status d'un ScalewaySecret, pour partir d'un état déjà synchronisé.
+    pub async fn set_scaleway_secret_status(&self, name: &str, status: ScalewaySecretStatus) {
+        let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
+        let patch = serde_json::json!({ "status": status });
+        api.patch_status(name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .unwrap_or_else(|e| panic!("set_scaleway_secret_status({}) failed: {}", name, e));
+    }
+
+    pub async fn get_scaleway_secret(&self, name: &str) -> ScalewaySecret {
+        let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
+        api.get(name)
+            .await
+            .unwrap_or_else(|e| panic!("get_scaleway_secret({}) failed: {}", name, e))
+    }
+
+    /// Relit le CR puis lance une réconciliation, comme le ferait le controller.
+    pub async fn reconcile_scaleway_secret(
+        &self,
+        name: &str,
+        ctx: &Arc<Context>,
+    ) -> Result<kube::runtime::controller::Action, OperatorError> {
+        let fetched = self.get_scaleway_secret(name).await;
+        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(fetched), ctx.clone())
+            .await
     }
 
     /// Supprime une Instance (retire d'abord le finalizer pour ne pas bloquer la GC).
@@ -757,102 +849,591 @@ async fn test_loadbalancer_create_sync_delete() {
     unimplemented!("test scaffold — see #119 for implementation tracking");
 }
 
-// ── ScalewaySecret integration tests (issue #118 — scaffolding) ───────────────
+// ── ScalewaySecret : couche I/O du reconciler (issue #118) ───────────────────
 //
-// Ces tests sont des squelettes pour démontrer la forme attendue ; ils sont
-// `#[ignore]` car ils nécessitent un cluster avec les fixtures de la section
-// "Fixtures ScalewaySecret" de k8s/test-fixtures.yaml ET un serveur mock
-// Scaleway pour le cas de création. La logique métier (opt-in, clé manquante,
-// création + revision) est déjà couverte par les tests unitaires de
-// reconcilers.rs ; ces tests fermeraient les bornes du contrat
-// `last_synced_resource_version == ks.metadata.resource_version` (SEC-002)
-// et de la cascade Create + create_secret_version.
-//
-// Implémentation complète à faire dans une PR de suivi — l'effort serait
-// déraisonnable pour cette PR (setup mockito multi-endpoints + cycle status
-// Scaleway). Le scaffolding ici sert de point d'entrée concret.
+// Chaque test crée son propre Secret source et son propre CR, pour pouvoir
+// tourner en parallèle. L'API Secret Manager est simulée par mockito.
+
+fn mock_json(server: &mut mockito::Server, method: &str, path: &str, body: &str) -> mockito::Mock {
+    server
+        .mock(method, path)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+}
+
+/// Recherche par tags : la requête porte `project_id` et `tags` en paramètres.
+fn mock_find_by_tags(server: &mut mockito::Server, body: &str) -> mockito::Mock {
+    server
+        .mock("GET", SECRETS_PATH)
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+}
+
+fn synced_status(scaleway_id: &str, revision: u32, resource_version: &str) -> ScalewaySecretStatus {
+    ScalewaySecretStatus {
+        scaleway_id: Some(scaleway_id.to_string()),
+        current_version: Some(revision),
+        last_synced_resource_version: Some(resource_version.to_string()),
+        sync_state: "Synced".to_string(),
+        error_message: None,
+    }
+}
 
 #[tokio::test]
-#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_scalewaysecret_opt_in_missing_returns_permanent_error() {
-    // Cas : CR ScalewaySecret pointe vers un Secret K8s sans label opt-in.
-    // Attendu : Err(SecretOptInMissing) — permanent (await_change, pas de retry).
     let server = mockito::Server::new_async().await;
     let fixture = TestFixture::for_namespace(NS_EDITOR).await;
     let name = unique_name("scw-secret-no-optin");
-    let _cr = fixture
-        .create_scaleway_secret(&name, KS_SECRET_NO_OPTIN, "password")
+    let (source, _) = fixture.create_source_secret(&name, "password", false).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
         .await;
     let ctx = fixture.ctx(&server.url());
 
-    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
-    let fetched = api.get(&name).await.expect("re-fetch ScalewaySecret");
-    let result =
-        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(fetched), ctx).await;
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
 
     fixture.cleanup_scaleway_secret(&name).await;
-    drop(server);
+    fixture.cleanup_source_secret(&source).await;
 
     let err = result.expect_err("expected SecretOptInMissing");
     assert!(
-        err.to_string().contains("opt-in"),
-        "expected opt-in error, got: {}",
-        err
+        matches!(err, OperatorError::SecretOptInMissing(_)),
+        "got: {err:?}"
     );
+    assert!(err.is_permanent_error());
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Error");
+    assert_eq!(status.scaleway_id, None);
 }
 
 #[tokio::test]
-#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API"]
+#[ignore = "requires: make test-integration-kind"]
 async fn test_scalewaysecret_key_missing_returns_permanent_error() {
-    // Cas : CR ScalewaySecret pointe vers un Secret K8s opt-in OK mais clé
-    // référencée absente de .data. Attendu : Err(SecretKeyNotFound) — permanent.
     let server = mockito::Server::new_async().await;
     let fixture = TestFixture::for_namespace(NS_EDITOR).await;
-    let name = "scw-secret-cr-2".to_string(); // annotation allowed-cr cible ce nom
-    let _cr = fixture
-        .create_scaleway_secret(&name, KS_SECRET_WRONG_KEY, "password")
+    let name = unique_name("scw-secret-wrong-key");
+    let (source, _) = fixture.create_source_secret(&name, "other", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
         .await;
     let ctx = fixture.ctx(&server.url());
 
-    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
-    let fetched = api.get(&name).await.expect("re-fetch ScalewaySecret");
-    let result =
-        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(fetched), ctx).await;
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
 
     fixture.cleanup_scaleway_secret(&name).await;
-    drop(server);
+    fixture.cleanup_source_secret(&source).await;
 
     let err = result.expect_err("expected SecretKeyNotFound");
     assert!(
-        err.to_string().to_lowercase().contains("key"),
-        "expected key-not-found error, got: {}",
-        err
+        matches!(err, OperatorError::SecretKeyNotFound(_)),
+        "got: {err:?}"
+    );
+    assert!(err.is_permanent_error());
+    assert_eq!(updated.status.expect("Expected status").sync_state, "Error");
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_create_writes_status_from_source_resource_version() {
+    let mut server = mockito::Server::new_async().await;
+    let find = mock_find_by_tags(&mut server, r#"{"secrets": []}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    let create = mock_json(
+        &mut server,
+        "POST",
+        SECRETS_PATH,
+        r#"{"id": "sec-created"}"#,
+    )
+    .expect(1)
+    .create_async()
+    .await;
+    let version = mock_json(
+        &mut server,
+        "POST",
+        &format!("{SECRETS_PATH}/sec-created/versions"),
+        r#"{"revision": 1}"#,
+    )
+    .expect(1)
+    .create_async()
+    .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-create");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    find.assert_async().await;
+    create.assert_async().await;
+    version.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.scaleway_id.as_deref(), Some("sec-created"));
+    assert_eq!(status.current_version, Some(1));
+    assert_eq!(status.last_synced_resource_version, Some(source_rv));
+    assert_eq!(status.sync_state, "Synced");
+    assert_eq!(status.error_message, None);
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_adoption_does_not_call_create() {
+    let mut server = mockito::Server::new_async().await;
+    mock_find_by_tags(&mut server, r#"{"secrets": [{"id": "sec-adopted"}]}"#)
+        .create_async()
+        .await;
+    let create = mock_json(&mut server, "POST", SECRETS_PATH, r#"{"id": "sec-other"}"#)
+        .expect(0)
+        .create_async()
+        .await;
+    let version = mock_json(
+        &mut server,
+        "POST",
+        &format!("{SECRETS_PATH}/sec-adopted/versions"),
+        r#"{"revision": 4}"#,
+    )
+    .expect(1)
+    .create_async()
+    .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-adopt");
+    let (source, _) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    create.assert_async().await;
+    version.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.scaleway_id.as_deref(), Some("sec-adopted"));
+    assert_eq!(status.current_version, Some(4));
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_rotation_survives_failed_disable_without_repush() {
+    let mut server = mockito::Server::new_async().await;
+    let version = mock_json(
+        &mut server,
+        "POST",
+        &format!("{SECRETS_PATH}/sec-rot/versions"),
+        r#"{"revision": 2}"#,
+    )
+    .expect(1)
+    .create_async()
+    .await;
+    let disable = server
+        .mock(
+            "POST",
+            format!("{SECRETS_PATH}/sec-rot/versions/1/disable").as_str(),
+        )
+        .with_status(500)
+        .with_body("boom")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-rot");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-rot", 1, "stale-rv"))
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let first = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let second = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(first.is_ok(), "Expected Ok, got: {:?}", first);
+    assert!(second.is_ok(), "Expected Ok, got: {:?}", second);
+    // Une seule version créée malgré deux réconciliations et un disable en échec.
+    version.assert_async().await;
+    disable.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.current_version, Some(2));
+    assert_eq!(status.last_synced_resource_version, Some(source_rv));
+    assert_eq!(status.sync_state, "Synced");
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_opt_in_removed_disables_version_and_marks_revoked() {
+    let mut server = mockito::Server::new_async().await;
+    let disable = mock_json(
+        &mut server,
+        "POST",
+        &format!("{SECRETS_PATH}/sec-rev/versions/3/disable"),
+        "{}",
+    )
+    .expect(1)
+    .create_async()
+    .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-revoke");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", false).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-rev", 3, &source_rv))
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    let err = result.expect_err("expected SecretOptInMissing");
+    assert!(
+        matches!(err, OperatorError::SecretOptInMissing(_)),
+        "got: {err:?}"
+    );
+    disable.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Revoked");
+    assert_eq!(status.scaleway_id.as_deref(), Some("sec-rev"));
+    assert_eq!(status.last_synced_resource_version, None);
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_failed_revocation_is_retried_and_not_marked_revoked() {
+    let mut server = mockito::Server::new_async().await;
+    let disable = server
+        .mock(
+            "POST",
+            format!("{SECRETS_PATH}/sec-rev-ko/versions/3/disable").as_str(),
+        )
+        .with_status(500)
+        .with_body("boom")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-revoke-ko");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", false).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-rev-ko", 3, &source_rv))
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    // L'erreur renvoyée est celle du disable, transitoire : la révocation sera retentée.
+    let err = result.expect_err("expected the disable error");
+    assert!(
+        matches!(err, OperatorError::ScalewayError { .. }),
+        "got: {err:?}"
+    );
+    assert!(!err.is_permanent_error());
+    disable.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_ne!(status.sync_state, "Revoked");
+    assert_eq!(status.last_synced_resource_version, Some(source_rv));
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_viewer_role_cannot_sync() {
+    let mut server = mockito::Server::new_async().await;
+    let any_scaleway_call = server
+        .mock("POST", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_VIEWER).await;
+    let name = unique_name("scw-secret-viewer");
+    let (source, _) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    let err = result.expect_err("expected a read-only role error");
+    assert!(matches!(err, OperatorError::ConfigError(_)), "got: {err:?}");
+    assert!(err.to_string().contains("read-only"), "got: {err}");
+    any_scaleway_call.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Error");
+    assert_eq!(status.scaleway_id, None);
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_invalid_region_is_rejected_before_any_scaleway_call() {
+    let mut server = mockito::Server::new_async().await;
+    let any_get = server
+        .mock("GET", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+    let any_post = server
+        .mock("POST", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-region");
+    let (source, _) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret_in_region(
+            &name,
+            &source,
+            "password",
+            "../../../instance/v1/zones/fr-par-1/servers/x?",
+        )
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    let err = result.expect_err("expected an invalid region error");
+    assert!(matches!(err, OperatorError::ConfigError(_)), "got: {err:?}");
+    any_get.assert_async().await;
+    any_post.assert_async().await;
+    assert_eq!(updated.status.expect("Expected status").sync_state, "Error");
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_deletion_calls_delete_api_and_removes_finalizer() {
+    let mut server = mockito::Server::new_async().await;
+    let delete = server
+        .mock("DELETE", format!("{SECRETS_PATH}/sec-del").as_str())
+        .with_status(204)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-delete");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-del", 1, &source_rv))
+        .await;
+    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+    // Le finalizer retient l'objet : il reste lisible avec un deletionTimestamp.
+    api.delete(&name, &DeleteParams::default())
+        .await
+        .expect("delete ScalewaySecret");
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let after = api.get_opt(&name).await.expect("get_opt ScalewaySecret");
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    delete.assert_async().await;
+    assert!(
+        after.is_none(),
+        "the CR should be gone once its finalizer is removed"
     );
 }
 
 #[tokio::test]
-#[ignore = "see #118 — needs cluster fixtures + mock Scaleway secret API (POST /secrets + POST /versions)"]
-async fn test_scalewaysecret_create_with_mock_scaleway_writes_status() {
-    // Happy path : K8s Secret opt-in OK + clé présente, Scaleway mock répond
-    // 201 sur POST /secrets et POST .../versions.
-    // Attendu : status.scaleway_id = "sec-mock-id"
-    //           status.last_synced_resource_version = rv du Secret K8s
-    //           sync_state = "Synced"
-    //
-    // Verrouille le contrat SEC-002 : `last_synced_resource_version` provient
-    // de `ks.metadata.resource_version` (et non pas d'un hash de la valeur).
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_finalizer_added_on_first_reconcile() {
+    let server = mockito::Server::new_async().await;
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-finalizer");
+    let (source, _) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+    let remove_finalizer = serde_json::json!({ "metadata": { "finalizers": null } });
+    api.patch(
+        &name,
+        &PatchParams::default(),
+        &Patch::Merge(remove_finalizer),
+    )
+    .await
+    .expect("remove finalizer");
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    assert_eq!(
+        updated.metadata.finalizers,
+        Some(vec![SECRET_FINALIZER.to_string()])
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_missing_source_secret_is_transient() {
+    let server = mockito::Server::new_async().await;
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-nosrc");
+    fixture
+        .create_scaleway_secret(&name, "does-not-exist", "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+
+    let err = result.expect_err("expected SecretNotFound");
+    assert!(
+        matches!(err, OperatorError::SecretNotFound(_)),
+        "got: {err:?}"
+    );
+    assert!(!err.is_permanent_error());
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Error");
+    // Le status ne doit pas révéler le nom du Secret recherché.
+    assert!(!status
+        .error_message
+        .unwrap_or_default()
+        .contains("does-not-exist"));
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_version_failure_sets_error_and_keeps_scaleway_id() {
     let mut server = mockito::Server::new_async().await;
-    server
-        .mock(
-            "GET",
-            "/account/v3/projects/11111111-1111-1111-1111-111111111111",
-        )
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(r#"{"id": "11111111-1111-1111-1111-111111111111"}"#)
+    mock_find_by_tags(&mut server, r#"{"secrets": []}"#)
         .create_async()
         .await;
-    // TODO(#118) : compléter les mocks find_by_tags + create_secret + create_secret_version
-    // et asserter status.last_synced_resource_version == rv du Secret K8s lu.
-    unimplemented!("see #118 — needs full Scaleway secret API mock surface");
+    mock_json(&mut server, "POST", SECRETS_PATH, r#"{"id": "sec-vko"}"#)
+        .create_async()
+        .await;
+    server
+        .mock("POST", format!("{SECRETS_PATH}/sec-vko/versions").as_str())
+        .with_status(500)
+        .with_body("boom")
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-vko");
+    let (source, _) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    let err = result.expect_err("expected the version creation error");
+    assert!(
+        matches!(err, OperatorError::ScalewayError { .. }),
+        "got: {err:?}"
+    );
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Error");
+    // Le secret créé reste référencé : le prochain tour pousse une version sans le recréer.
+    assert_eq!(status.scaleway_id.as_deref(), Some("sec-vko"));
+    assert_eq!(status.current_version, None);
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn test_scalewaysecret_failed_deletion_keeps_finalizer() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("DELETE", format!("{SECRETS_PATH}/sec-del-ko").as_str())
+        .with_status(500)
+        .with_body("boom")
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-delete-ko");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-del-ko", 1, &source_rv))
+        .await;
+    let api: Api<ScalewaySecret> = Api::namespaced(fixture.client.clone(), NS_EDITOR);
+    api.delete(&name, &DeleteParams::default())
+        .await
+        .expect("delete ScalewaySecret");
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let after = api.get_opt(&name).await.expect("get_opt ScalewaySecret");
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_err(), "Expected Err, got: {:?}", result);
+    let finalizers = after
+        .expect("the CR must survive a failed Scaleway deletion")
+        .metadata
+        .finalizers;
+    assert_eq!(finalizers, Some(vec![SECRET_FINALIZER.to_string()]));
 }
