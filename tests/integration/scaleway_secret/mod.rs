@@ -47,6 +47,7 @@ fn synced_status(scaleway_id: &str, revision: u32, resource_version: &str) -> Sc
         last_synced_resource_version: Some(resource_version.to_string()),
         sync_state: "Synced".to_string(),
         error_message: None,
+        observed_generation: None,
     }
 }
 
@@ -126,6 +127,18 @@ impl TestFixture {
         key: &str,
         opt_in: bool,
     ) -> (String, String) {
+        self.create_source_secret_with_keys(cr_name, &[key], opt_in)
+            .await
+    }
+
+    /// Variante à plusieurs clés. La valeur de chaque clé est `value-of-<clé>`,
+    /// pour pouvoir vérifier laquelle est envoyée à Scaleway.
+    pub async fn create_source_secret_with_keys(
+        &self,
+        cr_name: &str,
+        keys: &[&str],
+        opt_in: bool,
+    ) -> (String, String) {
         let api: Api<Secret> = Api::namespaced(self.client.clone(), self.ns);
         let name = format!("{}-src", cr_name);
         let (labels, annotations) = if opt_in {
@@ -150,10 +163,16 @@ impl TestFixture {
                 annotations,
                 ..Default::default()
             },
-            data: Some(BTreeMap::from([(
-                key.to_string(),
-                ByteString(b"s3cr3t".to_vec()),
-            )])),
+            data: Some(
+                keys.iter()
+                    .map(|key| {
+                        (
+                            key.to_string(),
+                            ByteString(format!("value-of-{key}").into_bytes()),
+                        )
+                    })
+                    .collect(),
+            ),
             ..Default::default()
         };
         let created = api

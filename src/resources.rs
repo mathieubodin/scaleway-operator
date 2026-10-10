@@ -242,7 +242,12 @@ pub struct ScalewaySecretStatus {
     #[serde(default)]
     pub last_synced_resource_version: Option<String>,
 
-    /// État de la synchronisation (Synced, Syncing, Error)
+    /// `metadata.generation` du CR à la dernière synchronisation.
+    /// Un spec modifié depuis (clé lue, par exemple) déclenche un nouvel envoi.
+    #[serde(default)]
+    pub observed_generation: Option<i64>,
+
+    /// État de la synchronisation (Synced, Syncing, Error, Revoked)
     #[serde(default)]
     pub sync_state: String,
 
@@ -257,6 +262,7 @@ impl Default for ScalewaySecretStatus {
             scaleway_id: None,
             current_version: None,
             last_synced_resource_version: None,
+            observed_generation: None,
             sync_state: "Syncing".to_string(),
             error_message: None,
         }
@@ -400,6 +406,7 @@ mod tests {
             scaleway_id: Some("sec-abc123".to_string()),
             current_version: Some(3),
             last_synced_resource_version: Some("12345".to_string()),
+            observed_generation: Some(2),
             sync_state: "Synced".to_string(),
             error_message: None,
         };
