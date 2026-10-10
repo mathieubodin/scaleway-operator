@@ -103,8 +103,8 @@ Le gate de merge repose sur deux required status checks :
 
 Trois contrôles sont informatifs, sans bloquer le merge :
 
-- `pr-metadata` — la PR référence une issue (`Closes #N` ou `Refs #N`) et porte un milestone, un label et une personne
-  assignée. Les PRs Dependabot et les PRs de release en sont dispensées
+- `pr-metadata` — la PR a un titre au format Conventional Commits, référence une issue (`Closes #N` ou `Refs #N`)
+  et porte un milestone, un label et une personne assignée. Les PRs Dependabot et les PRs de release en sont dispensées
 
 - `integration-tests` — tests d'intégration sur un cluster kind éphémère
 - `codecov/patch` — patch coverage ≥ 80 %, publié par l'application GitHub Codecov avec un commentaire
@@ -331,6 +331,14 @@ done
 3. **Committez** en conventional commits (`feat(scope): description`)
 4. **Référencez l'issue** dans le corps de la PR avec `Closes #N` : le modèle de PR propose la ligne, et le Status du board suit
 5. **Poussez** votre branche et **ouvrez une PR** avec une description claire
+
+Les PRs sont mergées en **squash** : le titre de la PR devient l'unique commit sur `main`, et c'est lui que lit l'outil
+de release. Il doit donc suivre le format Conventional Commits.
+
+| Type du titre | Effet |
+| --- | --- |
+| `feat`, `fix`, `perf` | nouvelle version et entrée de changelog : réservés à ce qui change pour un utilisateur de l'opérateur ou des charts |
+| `chore`, `ci`, `test`, `docs`, `refactor` | ni version ni entrée de changelog : outillage, CI, tests, documentation, code interne |
 
 **Checklist avant de soumettre :**
 
