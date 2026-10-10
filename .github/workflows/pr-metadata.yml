@@ -1,0 +1,61 @@
+name: PR metadata
+
+# Vérifie qu'une PR porte ce qui permet de la situer sans ouvrir son issue :
+# une issue référencée, un milestone, un label et une personne assignée.
+# Contrôle informatif, relancé à chaque changement de ces métadonnées.
+#
+# La présence dans le Project et le champ Tokens ne sont pas vérifiables ici :
+# lire un Project personnel demanderait un token personnel dans le dépôt.
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - assigned
+      - unassigned
+      - milestoned
+      - demilestoned
+
+concurrency:
+  group: pr-metadata-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  pr-metadata:
+    # Les PRs Dependabot et les PRs de release ne sont liées à aucune issue.
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'release-please--') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check issue reference, milestone, label and assignee
+        run: |
+          missing=()
+          jq -e '.pull_request.body // "" | test("\\b(close[sd]?|fix(e[sd])?|resolve[sd]?|refs) #[0-9]+"; "i")' "$GITHUB_EVENT_PATH" >/dev/null \
+            || missing+=("une issue référencée par 'Closes #N' ou 'Refs #N' dans la description")
+          jq -e '.pull_request.milestone != null' "$GITHUB_EVENT_PATH" >/dev/null \
+            || missing+=("un milestone")
+          jq -e '.pull_request.labels | length > 0' "$GITHUB_EVENT_PATH" >/dev/null \
+            || missing+=("au moins un label")
+          jq -e '.pull_request.assignees | length > 0' "$GITHUB_EVENT_PATH" >/dev/null \
+            || missing+=("une personne assignée")
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "Métadonnées complètes."
+            exit 0
+          fi
+          {
+            echo "### Métadonnées manquantes sur cette PR"
+            echo ""
+            for item in "${missing[@]}"; do echo "- $item"; done
+            echo ""
+            echo "Pour les recopier depuis l'issue liée : \`make sync-pr-metadata PR=<numéro>\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          for item in "${missing[@]}"; do echo "::error::Il manque $item"; done
+          exit 1
