@@ -26,5 +26,15 @@
     "deny": [
       "Edit(*.claude/settings*)"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/report-tokens.sh --hook" }
+        ]
+      }
+    ]
   }
 }
