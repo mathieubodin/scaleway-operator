@@ -217,6 +217,7 @@ Le suivi du board repose sur les automatisations natives du Project GitHub, rég
 GitHub ne recopie rien de l'issue vers la PR : `scripts/sync-pr-metadata.sh` s'en charge à l'ouverture de la PR,
 lancé par le même hook que le relevé des tokens, ou à la main avec `make sync-pr-metadata PR=<numéro>`.
 Il recopie le milestone, les labels, Axis, Priority et Effort de l'issue liée, et assigne la PR au mainteneur.
+L'issue liée est celle que la PR ferme par `Closes #N`, ou à défaut la première qu'elle cite par `Refs #N`.
 
 Pour qu'une PR et son issue ne fassent pas doublon, les vues du board et les graphiques Insights filtrent sur `is:issue`.
 Toute nouvelle vue ou tout nouveau graphique doit porter ce filtre.

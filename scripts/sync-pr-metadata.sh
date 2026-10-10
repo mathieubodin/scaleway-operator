@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Recopie sur une PR les métadonnées de l'issue qu'elle ferme par `Closes #N` :
+# Recopie sur une PR les métadonnées de l'issue qu'elle ferme par `Closes #N`,
+# ou à défaut de la première qu'elle cite par `Refs #N` :
 # milestone, labels, assignation, et ajout au Project GitHub avec Axis, Priority et Effort.
 # GitHub ne propage rien de l'issue vers la PR : sans cela, la PR n'affiche ni son
 # milestone ni son projet.
@@ -26,10 +27,15 @@ if [ -z "$pr" ]; then
     exit 1
 fi
 
-pr_json=$(gh pr view "$pr" --json url,state,closingIssuesReferences)
+pr_json=$(gh pr view "$pr" --json url,state,body,closingIssuesReferences)
 pr_url=$(jq -r '.url' <<<"$pr_json")
 pr_state=$(jq -r '.state' <<<"$pr_json")
+# Issue de référence : celle que la PR ferme, sinon la première citée par `Refs #N`
+# (PR qui complète une issue sans la fermer).
 issue=$(jq -r '.closingIssuesReferences[0].number // empty' <<<"$pr_json")
+if [ -z "$issue" ]; then
+    issue=$(jq -r '.body // ""' <<<"$pr_json" | grep -oiE '\brefs #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+fi
 
 gh pr edit "$pr" --add-assignee "@me" >/dev/null
 
@@ -53,7 +59,7 @@ case "$pr_state" in
 esac
 
 if [ -z "$issue" ]; then
-    echo "[metadata] PR #${pr} : assignée et ajoutée au Project. Aucune issue liée par Closes : milestone, labels et champs à compléter."
+    echo "[metadata] PR #${pr} : assignée et ajoutée au Project. Aucune issue liée par Closes ni citée par Refs : milestone, labels et champs à compléter."
     exit 0
 fi
 
