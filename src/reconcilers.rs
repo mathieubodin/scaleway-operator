@@ -1613,6 +1613,11 @@ struct SecretReconcileInput {
     /// La clé `spec.source.kubernetes_secret.key` existe dans `.data` du Secret K8s.
     /// Pertinent uniquement quand current_resource_version est Some.
     current_key_present: bool,
+    /// `metadata.generation` du CR : change à chaque modification du spec.
+    generation: Option<i64>,
+    /// Generation du CR à la dernière synchronisation, depuis le status.
+    /// None = synchronisé par une version de l'opérateur qui ne la suivait pas encore.
+    observed_generation: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -1673,6 +1678,14 @@ fn decide_next_action_secret(input: &SecretReconcileInput) -> SecretReconcileDec
     }
     // 7. Source modifiée depuis la dernière synchro — nouvelle version
     if input.current_resource_version != input.last_synced_resource_version {
+        return SecretReconcileDecision::PushNewVersion {
+            scaleway_id: input.scaleway_id.clone().unwrap(),
+        };
+    }
+    // 7bis. Spec du CR modifié depuis la dernière synchro (clé lue, par exemple) — nouvelle
+    // version. Une generation jamais observée ne déclenche rien : elle est enregistrée par
+    // AlreadySynced, pour ne pas re-pousser tous les secrets à la mise à jour de l'opérateur.
+    if input.observed_generation.is_some() && input.observed_generation != input.generation {
         return SecretReconcileDecision::PushNewVersion {
             scaleway_id: input.scaleway_id.clone().unwrap(),
         };
@@ -1828,6 +1841,8 @@ async fn reconcile_scaleway_secret_inner(
         last_synced_resource_version: current_status.last_synced_resource_version.clone(),
         current_resource_version: current_resource_version.clone(),
         current_key_present,
+        generation: secret_cr.metadata.generation,
+        observed_generation: current_status.observed_generation,
     };
 
     let decision = decide_next_action_secret(&input);
@@ -2045,6 +2060,7 @@ async fn reconcile_scaleway_secret_inner(
             status.scaleway_id = Some(scaleway_id);
             status.current_version = Some(revision);
             status.last_synced_resource_version = current_resource_version.clone();
+            status.observed_generation = secret_cr.metadata.generation;
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -2113,6 +2129,7 @@ async fn reconcile_scaleway_secret_inner(
             let mut status = current_status;
             status.current_version = Some(new_revision);
             status.last_synced_resource_version = current_resource_version.clone();
+            status.observed_generation = secret_cr.metadata.generation;
             status.sync_state = "Synced".to_string();
             status.error_message = None;
             update_secret_status(&secret_cr, &api, status).await?;
@@ -2144,6 +2161,17 @@ async fn reconcile_scaleway_secret_inner(
 
         SecretReconcileDecision::AlreadySynced => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            // Secret synchronisé avant que la generation soit suivie : l'enregistrer une fois,
+            // pour que le prochain changement de spec soit détecté.
+            if current_status.observed_generation.is_none() {
+                let mut status = current_status;
+                status.observed_generation = secret_cr.metadata.generation;
+                update_secret_status(&secret_cr, &api, status)
+                    .await
+                    .inspect_err(|_| {
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                    })?;
+            }
             measurer.set_outcome(ReconcileOutcome::Synced);
             Ok(Action::requeue(Duration::from_secs(30)))
         }
@@ -3048,7 +3076,37 @@ mod tests {
             last_synced_resource_version: Some("12345".to_string()),
             current_resource_version: Some("12345".to_string()),
             current_key_present: true,
+            generation: Some(1),
+            observed_generation: Some(1),
         }
+    }
+
+    #[test]
+    fn test_secret_decide_spec_change_pushes_new_version() {
+        // Le Secret source n'a pas bougé, mais le spec du CR a changé (clé lue, par exemple).
+        let input = SecretReconcileInput {
+            generation: Some(2),
+            observed_generation: Some(1),
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::PushNewVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn test_secret_decide_unknown_observed_generation_does_not_push() {
+        // Status écrit par une version antérieure : pas de re-push à la mise à jour.
+        let input = SecretReconcileInput {
+            generation: Some(4),
+            observed_generation: None,
+            ..base_secret_input()
+        };
+        assert!(matches!(
+            decide_next_action_secret(&input),
+            SecretReconcileDecision::AlreadySynced
+        ));
     }
 
     #[test]
@@ -3441,6 +3499,7 @@ mod tests {
             last_synced_resource_version: Some("12345".to_string()),
             sync_state: "Synced".to_string(),
             error_message: None,
+            observed_generation: None,
         };
         let s = build_anonymized_source_error_status(&current);
 
@@ -3518,6 +3577,7 @@ mod tests {
             last_synced_resource_version: Some("12345".to_string()),
             sync_state: "Synced".to_string(),
             error_message: None,
+            observed_generation: None,
         };
         let s = build_revoked_status(&current);
         let msg = s
@@ -3551,6 +3611,7 @@ mod tests {
             last_synced_resource_version: Some("12345".to_string()),
             sync_state: "Synced".to_string(),
             error_message: None,
+            observed_generation: None,
         };
         let s = build_revoked_status(&current);
 
@@ -3588,6 +3649,7 @@ mod tests {
             last_synced_resource_version: None,
             sync_state: "Syncing".to_string(),
             error_message: None,
+            observed_generation: None,
         };
         let s = build_revoked_status(&current);
 

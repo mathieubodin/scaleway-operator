@@ -67,7 +67,8 @@ Il n'a pas de zone mais une région, et sa source vit dans le cluster.
 5. deletion_timestamp ?  → DELETE du secret Scaleway + retrait du finalizer scaleway.mathieubodin.io/secret-finalizer
 6. ajouter finalizer     → requeue 5s
 7. créer ou adopter      → recherche par tags opérateur (namespace et nom du CR), création sinon, puis première version
-8. rotation              → nouvelle version si le resourceVersion du Secret source a changé,
+8. rotation              → nouvelle version si le resourceVersion du Secret source a changé
+                           ou si le spec du CR a changé (status.observed_generation),
                            puis désactivation best-effort de la version précédente
 9. requeue 30s           → détection de la prochaine rotation
 ```
