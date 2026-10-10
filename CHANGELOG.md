@@ -2,6 +2,28 @@
 
 User-facing changes to the operator binary and its container image. Chart changes are in `charts/*/CHANGELOG.md`.
 
+## [0.1.15](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.14...scaleway-operator-v0.1.15) (2026-10-10)
+
+
+### Features
+
+* **ops:** copy milestone, labels and project from the linked issue to pull requests ([d37e211](https://github.com/mathieubodin/scaleway-operator/commit/d37e2117ed76fc20eae7deec00bac82432ed04a2))
+* **ops:** copy milestone, labels and project from the linked issue to pull requests ([ae66d32](https://github.com/mathieubodin/scaleway-operator/commit/ae66d32aa1b61e0638af6be136d91e09ddf7ac1b)), refs [#152](https://github.com/mathieubodin/scaleway-operator/issues/152)
+* **ops:** fall back to the issue cited by Refs when a pull request closes none ([3b1161f](https://github.com/mathieubodin/scaleway-operator/commit/3b1161ff42f0e9c0f481d367b55ca2d31b7429e7))
+* **ops:** record produced tokens on the pull request project item ([db62180](https://github.com/mathieubodin/scaleway-operator/commit/db621809a67b0f6628c1fe558374bf88b8e93138))
+* **ops:** report produced tokens per pull request from a script and a hook ([18e810e](https://github.com/mathieubodin/scaleway-operator/commit/18e810e3a1fce659f7f63891005488a2627ab9b2))
+* **ops:** report produced tokens per pull request from a script and a hook ([2be70e9](https://github.com/mathieubodin/scaleway-operator/commit/2be70e9594b508c132e3b8a7cdfea2f4e0c46feb)), refs [#149](https://github.com/mathieubodin/scaleway-operator/issues/149)
+
+
+### Bug Fixes
+
+* **scaleway-secret:** let Scaleway disable the previous version on each push ([2a6cf34](https://github.com/mathieubodin/scaleway-operator/commit/2a6cf34d969fb8381574952398401d92bd56f9ac))
+* **scaleway-secret:** let Scaleway disable the previous version on each push ([a5c86a4](https://github.com/mathieubodin/scaleway-operator/commit/a5c86a40338b2566d42860960ed9057710c02f70)), refs [#117](https://github.com/mathieubodin/scaleway-operator/issues/117)
+* **scaleway-secret:** recheck source-side errors and retry transient credential lookups ([238b115](https://github.com/mathieubodin/scaleway-operator/commit/238b1158028c037592d55640a5742d15a7bea480))
+* **scaleway-secret:** recheck source-side errors and retry transient credential lookups ([19772d0](https://github.com/mathieubodin/scaleway-operator/commit/19772d06d98f3887a7e82bcd649f9ce89820757d)), refs [#128](https://github.com/mathieubodin/scaleway-operator/issues/128)
+* **scaleway-secret:** resync when the CR spec changes ([f149e2e](https://github.com/mathieubodin/scaleway-operator/commit/f149e2e388951a74c019ed414b9a1cb6bc4ea336))
+* **scaleway-secret:** resync when the CR spec changes ([d4d899e](https://github.com/mathieubodin/scaleway-operator/commit/d4d899e0620f4c3da3b9ebcad45610ad2e379e63)), refs [#127](https://github.com/mathieubodin/scaleway-operator/issues/127)
+
 ## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.13...scaleway-operator-v0.1.14) (2026-10-09)
 
 ### Features
