@@ -92,14 +92,21 @@ Trois workflows GitHub Actions s'exécutent automatiquement :
 | Workflow | Déclencheur | Jobs |
 | --- | --- | --- |
 | `pr.yml` | Toute PR vers `main` | `lint` (make check), `unit-tests` (coverage-lcov + Codecov flag `unit`) |
-| `integration.yml` | Push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
+| `integration.yml` | Toute PR vers `main`, et push sur `main` | `integration-tests` (coverage-kind-lcov + Codecov flag `integration`) |
 | `release.yml` | Release publiée | `image` (tags `scaleway-operator-v*`), `chart` (tags `scaleway-operator-chart-v*` et `scaleway-operator-crds-v*`) |
 
-Le gate de merge repose sur trois required status checks :
+Le gate de merge repose sur deux required status checks :
 
 - `lint` — `make check` doit passer (cargo fmt + clippy + markdownlint)
 - `unit-tests` — tests unitaires + couverture générée
-- `codecov/patch` — patch coverage ≥ 80 % (activé après la première upload Codecov)
+
+Deux contrôles sont informatifs, sans bloquer le merge :
+
+- `integration-tests` — tests d'intégration sur un cluster kind éphémère
+- `codecov/patch` — patch coverage ≥ 80 %, publié par l'application GitHub Codecov avec un commentaire
+  qui détaille l'écart de couverture de la PR
+
+La couverture affichée sur une PR cumule tests unitaires et tests d'intégration.
 
 **Glossaire :**
 
