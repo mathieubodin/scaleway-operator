@@ -27,10 +27,27 @@ if [ -z "$pr" ]; then
 fi
 branch=$(gh pr view "$pr" --repo "$RELEASE_REPO" --json headRefName --jq '.headRefName')
 
+# release-please ne reconstruit sa branche que si le contenu de la PR change. Quand main
+# avance sans rien changer aux notes de release, la branche reste sur l'ancien main et
+# finit en conflit. Modifier la description de la PR l'oblige à tout reconstruire.
+git fetch --quiet origin main "$branch"
+if ! git merge-base --is-ancestor origin/main "origin/$branch"; then
+    echo "[release] La PR de release #${pr} est en retard sur main : reconstruction forcée..."
+    body=$(gh pr view "$pr" --repo "$RELEASE_REPO" --json body --jq '.body')
+    gh pr edit "$pr" --repo "$RELEASE_REPO" --body "${body}
+
+<!-- rebuild -->" >/dev/null
+    run_release_please release-pr
+    git fetch --quiet origin "$branch"
+    if ! git merge-base --is-ancestor origin/main "origin/$branch"; then
+        echo "ERREUR : la PR de release #${pr} reste en retard sur main après reconstruction." >&2
+        exit 1
+    fi
+fi
+
 worktree=$(mktemp -d)
 trap 'git worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
-git fetch --quiet origin "$branch"
-git worktree add --quiet --detach "$worktree" FETCH_HEAD
+git worktree add --quiet --detach "$worktree" "origin/$branch"
 
 chart_version() {
     local version

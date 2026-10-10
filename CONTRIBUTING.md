@@ -160,6 +160,9 @@ Points d'attention :
 - Ne jamais lancer release-please autrement que par `make release-prepare` : il régénère sa branche
   et écraserait le commit du README.
 - `make release-prepare` refuse de démarrer tant qu'une PR de release mergée n'est pas publiée.
+- `make release-prepare` reconstruit la PR de release si `main` a avancé depuis sa création, ce que release-please
+  ne fait pas de lui-même tant que les notes de release sont inchangées.
+- Des notes de release corrigées à la main dans la PR sont écrasées par la prochaine exécution de `make release-prepare`.
 - Si la publication échoue alors que la release existe déjà, relancer le workflow `release.yml` sur cette release.
 - La version de la CLI release-please est épinglée dans `scripts/release-common.sh`.
 
