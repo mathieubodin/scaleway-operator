@@ -4,11 +4,9 @@ User-facing changes to the `scaleway-operator-crds` chart. The chart is versione
 
 ## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.13...scaleway-operator-crds-v0.1.14) (2026-10-10)
 
+### Features
 
-### Bug Fixes
-
-* **scaleway-secret:** resync when the CR spec changes ([f149e2e](https://github.com/mathieubodin/scaleway-operator/commit/f149e2e388951a74c019ed414b9a1cb6bc4ea336))
-* **scaleway-secret:** resync when the CR spec changes ([d4d899e](https://github.com/mathieubodin/scaleway-operator/commit/d4d899e0620f4c3da3b9ebcad45610ad2e379e63)), refs [#127](https://github.com/mathieubodin/scaleway-operator/issues/127)
+* **scaleway-secret:** add `status.observed_generation` to the `ScalewaySecret` CRD ([#127](https://github.com/mathieubodin/scaleway-operator/issues/127))
 
 ## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-crds-v0.1.12...scaleway-operator-crds-v0.1.13) (2026-10-09)
 
