@@ -603,6 +603,10 @@ impl ScalewayClient {
 
     /// Creates a new version for `secret_id`. The payload is base64-encoded
     /// before being sent. Returns the revision number of the new version.
+    ///
+    /// `disable_previous` asks Scaleway to disable the previous version in the same
+    /// call, so a version this operator lost track of never stays enabled next to
+    /// the new one. It does nothing when there is no previous version.
     pub async fn create_secret_version(
         &self,
         region: &str,
@@ -611,6 +615,7 @@ impl ScalewayClient {
     ) -> Result<u32> {
         let body = json!({
             "data": BASE64.encode(payload),
+            "disable_previous": true,
         });
 
         let url = format!(
@@ -1642,7 +1647,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_secret_version_success() {
         let mut server = mockito::Server::new_async().await;
-        // Vérifie que le payload est base64-encodé dans le body :
+        // Vérifie que le payload est base64-encodé dans le body et que Scaleway
+        // est chargé de désactiver la version précédente :
         // base64("my-payload") = "bXktcGF5bG9hZA=="
         server
             .mock(
@@ -1650,7 +1656,7 @@ mod tests {
                 "/secret-manager/v1beta1/regions/fr-par/secrets/sec-abc/versions",
             )
             .match_body(mockito::Matcher::PartialJsonString(
-                r#"{"data": "bXktcGF5bG9hZA=="}"#.to_string(),
+                r#"{"data": "bXktcGF5bG9hZA==", "disable_previous": true}"#.to_string(),
             ))
             .with_status(200)
             .with_header("content-type", "application/json")

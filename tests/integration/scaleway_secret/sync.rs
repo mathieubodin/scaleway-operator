@@ -101,7 +101,7 @@ async fn adoption_does_not_call_create() {
 
 #[tokio::test]
 #[ignore = "requires: make test-integration-kind"]
-async fn rotation_survives_failed_disable_without_repush() {
+async fn rotation_lets_scaleway_disable_the_previous_version() {
     let mut server = mockito::Server::new_async().await;
     let version = mock_json(
         &mut server,
@@ -109,17 +109,19 @@ async fn rotation_survives_failed_disable_without_repush() {
         &format!("{SECRETS_PATH}/sec-rot/versions"),
         r#"{"revision": 2}"#,
     )
+    .match_body(mockito::Matcher::PartialJsonString(
+        r#"{"disable_previous": true}"#.to_string(),
+    ))
     .expect(1)
     .create_async()
     .await;
+    // La désactivation passe par l'appel de création : plus d'appel séparé.
     let disable = server
         .mock(
             "POST",
-            format!("{SECRETS_PATH}/sec-rot/versions/1/disable").as_str(),
+            mockito::Matcher::Regex(r"/versions/\d+/disable$".to_string()),
         )
-        .with_status(500)
-        .with_body("boom")
-        .expect(1)
+        .expect(0)
         .create_async()
         .await;
 
@@ -143,13 +145,58 @@ async fn rotation_survives_failed_disable_without_repush() {
 
     assert!(first.is_ok(), "Expected Ok, got: {:?}", first);
     assert!(second.is_ok(), "Expected Ok, got: {:?}", second);
-    // Une seule version créée malgré deux réconciliations et un disable en échec.
+    // Une seule version créée sur deux réconciliations.
     version.assert_async().await;
     disable.assert_async().await;
     let status = updated.status.expect("Expected status");
     assert_eq!(status.current_version, Some(2));
     assert_eq!(status.last_synced_resource_version, Some(source_rv));
     assert_eq!(status.sync_state, "Synced");
+}
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn repush_after_lost_status_update_disables_the_untracked_version() {
+    // État après un push réussi dont le patch du status a échoué (issue #117) :
+    // Scaleway a déjà une version 2 active, le status en est resté à la version 1.
+    let mut server = mockito::Server::new_async().await;
+    let version = mock_json(
+        &mut server,
+        "POST",
+        &format!("{SECRETS_PATH}/sec-orphan/versions"),
+        r#"{"revision": 3}"#,
+    )
+    .match_body(mockito::Matcher::PartialJsonString(
+        r#"{"disable_previous": true}"#.to_string(),
+    ))
+    .expect(1)
+    .create_async()
+    .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-orphan");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    fixture
+        .set_scaleway_secret_status(&name, synced_status("sec-orphan", 1, "rv-before-push"))
+        .await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result = fixture.reconcile_scaleway_secret(&name, &ctx).await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    // La version 3 est créée en demandant à Scaleway de désactiver la précédente,
+    // c'est-à-dire la version 2 que le status ne connaît pas.
+    version.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.current_version, Some(3));
+    assert_eq!(status.last_synced_resource_version, Some(source_rv));
 }
 
 #[tokio::test]
@@ -169,15 +216,6 @@ async fn spec_key_change_pushes_the_new_key_without_source_change() {
     .expect(1)
     .create_async()
     .await;
-    mock_json(
-        &mut server,
-        "POST",
-        &format!("{SECRETS_PATH}/sec-key/versions/1/disable"),
-        "{}",
-    )
-    .create_async()
-    .await;
-
     let fixture = TestFixture::for_namespace(NS_EDITOR).await;
     let name = unique_name("scw-secret-key");
     let (source, source_rv) = fixture
