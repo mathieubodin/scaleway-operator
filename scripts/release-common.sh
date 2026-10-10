@@ -29,8 +29,13 @@ run_release_please() {
         --manifest-file=.release-please-manifest.json
 }
 
+RELEASE_BRANCH="${RELEASE_BRANCH:-release-please--branches--main}"
+
 # Numéro de la PR de release dans l'état donné (open ou merged), vide si aucune.
+# La PR est retrouvée par sa branche et non par une recherche sur son label :
+# l'index de recherche de GitHub a du retard sur une PR qui vient d'être créée.
 release_pr_number() {
-    gh pr list --repo "$RELEASE_REPO" --state "$1" --label "$RELEASE_PENDING_LABEL" \
-        --json number --jq '.[0].number // empty'
+    gh pr list --repo "$RELEASE_REPO" --state "$1" --head "$RELEASE_BRANCH" --limit 20 \
+        --json number,labels \
+        --jq "map(select(any(.labels[]; .name == \"${RELEASE_PENDING_LABEL}\"))) | .[0].number // empty"
 }

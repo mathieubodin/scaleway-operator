@@ -1,293 +1,99 @@
 # Changelog
 
-## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.13...scaleway-operator-v0.1.14) (2026-10-09)
+User-facing changes to the operator binary and its container image. Chart changes are in `charts/*/CHANGELOG.md`.
 
+## [0.1.14](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.13...scaleway-operator-v0.1.14) (2026-10-09)
 
 ### Features
 
-* **ci-coverage:** add .codecov.yml — patch gate 80%, unit/integration flags ([32a2d55](https://github.com/mathieubodin/scaleway-operator/commit/32a2d55e37bf83670fe9d423076a34ef0c9419a0)), refs [#97](https://github.com/mathieubodin/scaleway-operator/issues/97)
-* **ci-coverage:** add coverage-lcov and coverage-kind-lcov Makefile targets ([3df4e32](https://github.com/mathieubodin/scaleway-operator/commit/3df4e320a9f79f546f57a3e2c356ecc399a401ff)), refs [#96](https://github.com/mathieubodin/scaleway-operator/issues/96)
-* **ci-coverage:** add pr.yml — lint + unit tests + Codecov patch gate ([908822b](https://github.com/mathieubodin/scaleway-operator/commit/908822b026dc784aa5a9bff8502defb5ca82e7c5)), refs [#98](https://github.com/mathieubodin/scaleway-operator/issues/98)
-* **ci-coverage:** upgrade release.yml integration-tests to full coverage upload ([22422d0](https://github.com/mathieubodin/scaleway-operator/commit/22422d0872025598b2dfdb8da4d46d6ffeae5628)), refs [#99](https://github.com/mathieubodin/scaleway-operator/issues/99)
-* **milestone-1:** CI coverage gate + ScalewaySecret CRD reconciler ([297616c](https://github.com/mathieubodin/scaleway-operator/commit/297616c53d75f2bc732b9e3e17f248ce75f6dc70))
-* **scaleway-secret:** U1 — CRD types ScalewaySecretSpec/Status/SecretSource ([476e0a1](https://github.com/mathieubodin/scaleway-operator/commit/476e0a14d89fcadd2b393ccef63e57e1ceed3087)), refs [#59](https://github.com/mathieubodin/scaleway-operator/issues/59)
-* **scaleway-secret:** U2 — error variants SecretNotFound/SecretSourceNotConfigured ([b8e096f](https://github.com/mathieubodin/scaleway-operator/commit/b8e096ff091dd2448e1f40322eb6ba3fe5801455)), refs [#60](https://github.com/mathieubodin/scaleway-operator/issues/60)
-* **scaleway-secret:** U3 — Scaleway Secret Manager client methods ([036a824](https://github.com/mathieubodin/scaleway-operator/commit/036a8246231f55f7e50db7b6f1e13ac7dfbf4abd)), refs [#61](https://github.com/mathieubodin/scaleway-operator/issues/61)
-* **scaleway-secret:** U4 — ScalewaySecret reconciler (pure layer + I/O) ([adafcd5](https://github.com/mathieubodin/scaleway-operator/commit/adafcd5eb0672d6652082429a8f00e15718f4160)), refs [#62](https://github.com/mathieubodin/scaleway-operator/issues/62)
-* **scaleway-secret:** U5 — register ScalewaySecret controller in main.rs ([84f6e5e](https://github.com/mathieubodin/scaleway-operator/commit/84f6e5ea67e495d47c736acbbffbbd9fc6260c7a)), refs [#63](https://github.com/mathieubodin/scaleway-operator/issues/63)
-* **scaleway-secret:** U6 — CRD manifests + Helm chart for ScalewaySecret ([2b179db](https://github.com/mathieubodin/scaleway-operator/commit/2b179db8c0578136b8532b06f7f56ba0ceed1fb7)), refs [#64](https://github.com/mathieubodin/scaleway-operator/issues/64)
+* **scaleway-secret:** add the `ScalewaySecret` CRD, which syncs one key of a Kubernetes Secret to Scaleway Secret Manager and pushes a new version when the Secret changes ([#35](https://github.com/mathieubodin/scaleway-operator/issues/35))
 
+### Upgrade notes
 
-### Bug Fixes
-
-* **chart:** keep the ScalewaySecret CRD on uninstall and align finalizer name in docs ([02a0197](https://github.com/mathieubodin/scaleway-operator/commit/02a01974bc181fe4898631f35bd1c67b6886c7a8))
-* **ci-coverage:** address code review findings from CI gate implementation ([9526662](https://github.com/mathieubodin/scaleway-operator/commit/9526662283e09d7433d4f64d50203c9aef568a07))
-* **scaleway-secret:** COR-01 + COR-04 + tests d'erreur Secret Manager ([ce7c1d3](https://github.com/mathieubodin/scaleway-operator/commit/ce7c1d34821bedf19906ce732f83a1e2ae787a5a))
-* **scaleway-secret:** lier l'opt-in à l'identité du CR (closes [#115](https://github.com/mathieubodin/scaleway-operator/issues/115)) ([6f5107c](https://github.com/mathieubodin/scaleway-operator/commit/6f5107c196dc283a9202afd2392fbf8535d18925))
-* **scaleway-secret:** rendre disable_secret_version best-effort (closes [#114](https://github.com/mathieubodin/scaleway-operator/issues/114)) ([1fae1e9](https://github.com/mathieubodin/scaleway-operator/commit/1fae1e932226a541130e35ddb581379da35037be))
-* **scaleway-secret:** reserve-intent status préliminaire dans CreateAndSync (closes [#117](https://github.com/mathieubodin/scaleway-operator/issues/117)) ([8ba62cb](https://github.com/mathieubodin/scaleway-operator/commit/8ba62cbc86df4b395e5a71758ba2fb7c250724d2))
-* **scaleway-secret:** révoquer la version Scaleway sur retrait opt-in (closes [#116](https://github.com/mathieubodin/scaleway-operator/issues/116)) ([d61d700](https://github.com/mathieubodin/scaleway-operator/commit/d61d70037aeb6488074bc2bfaf3fbdbe4667e022))
-* **scaleway-secret:** tracer l'échec du patch Revoked (observabilité) ([4712634](https://github.com/mathieubodin/scaleway-operator/commit/471263465af4290f3269ea268236eb765c3c5a82))
-* **scaleway-secret:** transitionner status vers Error si create échoue après prelim ([4d87af9](https://github.com/mathieubodin/scaleway-operator/commit/4d87af9b398586160e8b62b5fb78f2dcbfbde8a7))
-* **scaleway-secret:** validate region, enforce NamespaceRole and retry failed revocation ([ecbd559](https://github.com/mathieubodin/scaleway-operator/commit/ecbd559a5da351a0588fa94ebe6bd796d838c032))
-* **scaleway:** drop redundant references in format! arguments ([8844e91](https://github.com/mathieubodin/scaleway-operator/commit/8844e917717266cfda26a1971dd21cad9d5afdf5))
-* **security:** Confused Deputy — opt-in label + namespace-scoped RBAC ([5aa63f3](https://github.com/mathieubodin/scaleway-operator/commit/5aa63f3657c6eeac60399145f359229cc8bb9fc5))
-* **security:** SEC-002 — remplacer hash de valeur par resourceVersion ([797b2d2](https://github.com/mathieubodin/scaleway-operator/commit/797b2d26f08bc4a93290ac798cbc71fd8e795674))
-* **security:** TOCTOU + info disclosure + permanent SecretKeyNotFound ([6f35080](https://github.com/mathieubodin/scaleway-operator/commit/6f350807e3c7073a241d87306a5d4f94479a1236))
-
-
-### Refactoring
-
-* **scaleway-secret:** typed KsSourceState enum + doc cascade resourceVersion (closes [#118](https://github.com/mathieubodin/scaleway-operator/issues/118)) ([304aeda](https://github.com/mathieubodin/scaleway-operator/commit/304aedad29a9949be6873d52b1b9f5339e43f1fe))
-
-
-### Documentation
-
-* **analyses:** add burn-down skill analysis ([13e399e](https://github.com/mathieubodin/scaleway-operator/commit/13e399e8c126137eff98a8607d06d957404f4838))
-* **analyses:** add burn-down skill analysis ([9b52118](https://github.com/mathieubodin/scaleway-operator/commit/9b521186e36c6829f6c8ff0686d0dd0e78ea7832))
-* **ci-coverage:** add Pipeline CI section to CONTRIBUTING.md ([f18e456](https://github.com/mathieubodin/scaleway-operator/commit/f18e456bdb113109f1e266e44a8c628f12e99d05)), refs [#101](https://github.com/mathieubodin/scaleway-operator/issues/101)
-* **claude-md:** documenter les reconcilers LoadBalancer et ScalewaySecret ([561e492](https://github.com/mathieubodin/scaleway-operator/commit/561e4921bdc18da2f11ef83440e9ebbf664ec03c))
-* **contributing:** define the token figure reported by /cost ([984e5c7](https://github.com/mathieubodin/scaleway-operator/commit/984e5c78213e067be8ddddd57bddb8bd399bc779))
-* **contributing:** define the token figure reported by /cost ([2f8464c](https://github.com/mathieubodin/scaleway-operator/commit/2f8464cba39840344fef28788abf4f0ecf2ee0ac))
-* **contributing:** enrichir la section Pipeline CI (post-review) ([af2f8df](https://github.com/mathieubodin/scaleway-operator/commit/af2f8dfa56fbe910d71ce14015239ed982462f5a))
-* move reconciler flows to ARCHITECTURE.md and document shell-based GitHub access ([961aa19](https://github.com/mathieubodin/scaleway-operator/commit/961aa1966e1cae8a867a558da3df9e5a3394ecce)), refs [#132](https://github.com/mathieubodin/scaleway-operator/issues/132)
-* **readme:** badges + CRDs M1 + liens documentation ([358ef83](https://github.com/mathieubodin/scaleway-operator/commit/358ef83f9e6dbc2e5e487df70e5e68bd38ef79ad))
-* replace CLAUDE.md with AGENTS.md and document shell-based GitHub access ([2809e96](https://github.com/mathieubodin/scaleway-operator/commit/2809e962e81c79f336a295b8f38d95436c27db84))
-* **scaleway-secret:** clarifier les findings reviewer sur [#114](https://github.com/mathieubodin/scaleway-operator/issues/114) ([7273fc8](https://github.com/mathieubodin/scaleway-operator/commit/7273fc8174c7e51c19131ce31bb25a7a0e953540))
-* **scaleway-secret:** polish [#118](https://github.com/mathieubodin/scaleway-operator/issues/118) — frontmatter + escalation invariant ([6dc68c7](https://github.com/mathieubodin/scaleway-operator/commit/6dc68c71f10ad9ab71728002486b8666914a0f52))
-* **scaleway-secret:** polish CLAUDE.md — exemple YAML + limite trust boundary ([a62aea0](https://github.com/mathieubodin/scaleway-operator/commit/a62aea0c6478e7463d06ac683c725dd7b7f95632))
-* **solutions:** document that integration test scaffolds must be skipped in kind runs ([41af983](https://github.com/mathieubodin/scaleway-operator/commit/41af983b38f230574f1dfb34c3d1847eea4e8074)), refs [#118](https://github.com/mathieubodin/scaleway-operator/issues/118)
+* The operator only reads a source Secret that opts in: it must carry the label `scaleway.mathieubodin.io/allow-operator-read: "true"` and the annotation `scaleway.mathieubodin.io/allowed-cr: "<namespace>/<name>"` naming the `ScalewaySecret` allowed to read it.
+* Requires the `scaleway-operator-crds` chart 0.1.13 or later, and the per-namespace Role created by `namespaceBootstrap` in the `scaleway-operator` chart 0.1.13.
 
 ## [0.1.13](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.12...scaleway-operator-v0.1.13) (2026-06-12)
 
-
 ### Bug Fixes
 
-* **docker:** resolve rust-toolchain override before adding musl targets ([c9edb2b](https://github.com/mathieubodin/scaleway-operator/commit/c9edb2b37e5bbdeabf400570c4f87b7a42ab1d58))
-* **docker:** resolve rust-toolchain override before adding musl targets ([78d150e](https://github.com/mathieubodin/scaleway-operator/commit/78d150e2431fd90fdbf807c7319957e791d1265a))
+* **image:** fix the multi-arch image build, which failed to add the musl targets under the pinned Rust toolchain
 
 ## [0.1.12](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.11...scaleway-operator-v0.1.12) (2026-06-12)
 
-
-### Features
-
-* **ops:** add Claude Code token hooks (SessionStart + Stop) ([1d28e73](https://github.com/mathieubodin/scaleway-operator/commit/1d28e739536b32d12315070213289bf7cd9e17a8))
-* **ops:** add git prepare-commit-msg hook for token trailers ([26dc4bb](https://github.com/mathieubodin/scaleway-operator/commit/26dc4bb00deabf18184d68a1c563130cf8bb896f))
-* **ops:** add milestone prep process — Field IDs, workflow, CONTRIBUTING.md ([0993d70](https://github.com/mathieubodin/scaleway-operator/commit/0993d70bb79ab28d206dce6c42fd93e9872b1ed0))
-* **ops:** add milestone prep process — Field IDs, workflow, CONTRIBUTING.md ([5164e36](https://github.com/mathieubodin/scaleway-operator/commit/5164e36d15345a4122f9e161e509411586a7f86f))
-* **ops:** add setup-dev.sh — install token tracking hooks ([e41cd39](https://github.com/mathieubodin/scaleway-operator/commit/e41cd39e35b44d844dbc30dee59736e0f8210c39))
-* **ops:** token tracking dans les commits git avec session ID ([75afd3a](https://github.com/mathieubodin/scaleway-operator/commit/75afd3a4bccd81fdcc1ae876243be81ddeff8400))
-
-
-### Bug Fixes
-
-* **ci:** use preinstalled kind binary on ubuntu-latest runner ([d7e5627](https://github.com/mathieubodin/scaleway-operator/commit/d7e5627cac0d9e19178aa0b821f6cc8d5b55529f))
-* **ci:** use preinstalled kind binary on ubuntu-latest runner ([e34e1ba](https://github.com/mathieubodin/scaleway-operator/commit/e34e1baa8d9e134110aeeeb932c309fceae3e532))
-* **ops:** address code review findings on token tracking hooks ([7f84fe3](https://github.com/mathieubodin/scaleway-operator/commit/7f84fe3d9c0b3cc7f559926970e98b4583d6b34c))
-* **ops:** correct stop hook gating and session baseline reset ([ac32658](https://github.com/mathieubodin/scaleway-operator/commit/ac32658403e88685b636fafc58ebe509bdc21530))
-* **ops:** inject trailers via git interpret-trailers ([1132310](https://github.com/mathieubodin/scaleway-operator/commit/11323100de24ae1920b5461d8412771c752a01fc))
-
-
-### Refactoring
-
-* **ops:** move prepare-commit-msg to .githooks/ (standard convention) ([8d6a063](https://github.com/mathieubodin/scaleway-operator/commit/8d6a063137250c0930b4b67b331ae9d312b07714))
-
-
-### Documentation
-
-* **claude:** surface GitHub Project v2 integration in agent context ([6a3583d](https://github.com/mathieubodin/scaleway-operator/commit/6a3583d7b9012e50dd799f9fb2412f808f6e0db2))
-* **ops:** add priority governance rule to milestone prep process section ([61a00f1](https://github.com/mathieubodin/scaleway-operator/commit/61a00f1d5d196c214616c407a0c6f78b0d0febc7))
-* **ops:** document token tracking setup and aggregation queries ([da2aa84](https://github.com/mathieubodin/scaleway-operator/commit/da2aa841cbdf88dda171430632568c19a596d41b))
-* **ops:** fix sub-issues API + style cleanup ([#107](https://github.com/mathieubodin/scaleway-operator/issues/107)) ([90300b0](https://github.com/mathieubodin/scaleway-operator/commit/90300b053ba61e6a598ea950996a13038f888bbd))
-* **ops:** rename "Project v2 Field IDs" to "Project Field IDs" ([fdef488](https://github.com/mathieubodin/scaleway-operator/commit/fdef48814f8d4f06d9920a14658182381d2c251e))
-* **solutions:** add .message.usage transcript pitfall to trailer learning ([58afa68](https://github.com/mathieubodin/scaleway-operator/commit/58afa68f16f3d92daff1ea0fa55391ff1df94a73))
-* **solutions:** compound learning on git trailer block poisoning ([120e21a](https://github.com/mathieubodin/scaleway-operator/commit/120e21a3253c1c527d0e8d3e82e50504b5664699))
+No user-facing changes.
 
 ## [0.1.11](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.10...scaleway-operator-v0.1.11) (2026-06-03)
 
-
-### Features
-
-* **coverage:** add coverage-kind targets merging unit and integration tests ([b5e09af](https://github.com/mathieubodin/scaleway-operator/commit/b5e09af3fe1a2ca6ad527c89024a480f2c202fe6))
-
-
-### Bug Fixes
-
-* **chart:** restore LoadBalancer CRD template to scaleway-operator-crds ([cab35cf](https://github.com/mathieubodin/scaleway-operator/commit/cab35cf7594182baa875d253eec5b6fa452b0289))
-* **tests:** remove unused fresh_circuit_breaker helper and unused mut ([b5e09af](https://github.com/mathieubodin/scaleway-operator/commit/b5e09af3fe1a2ca6ad527c89024a480f2c202fe6))
-* **tests:** skip unimplemented LB lifecycle test in kind and fix ignore messages ([88f2991](https://github.com/mathieubodin/scaleway-operator/commit/88f299184e6ecfaf1b92e2e38554d200699827e2))
-
-
-### Documentation
-
-* **coverage:** add compound solution for coverage-kind integration workflow ([6867c2b](https://github.com/mathieubodin/scaleway-operator/commit/6867c2b56a0adac9959d3ef9476c1e4720273b8f))
+No user-facing changes.
 
 ## [0.1.10](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.9...scaleway-operator-v0.1.10) (2026-05-29)
 
-### Features
-
-* **ops:** add agentic-assistant-1 GitHub App identity for Claude Code ([#88](https://github.com/mathieubodin/scaleway-operator/issues/88)) ([8135d48](https://github.com/mathieubodin/scaleway-operator/commit/8135d4805613dc24a9d52ba96e60e3266a8394c6))
-* **ops:** setup GitHub Project v2 roadmap traceability ([#87](https://github.com/mathieubodin/scaleway-operator/issues/87)) ([b6d1b8c](https://github.com/mathieubodin/scaleway-operator/commit/b6d1b8cc2ff68e0455703fb7f208d7c460573b2f))
-
-### Bug Fixes
-
-* **lint:** remove dead code and needless returns in reconcilers ([#49](https://github.com/mathieubodin/scaleway-operator/issues/49)) ([0b57f40](https://github.com/mathieubodin/scaleway-operator/commit/0b57f404cf98a3194f55ad8ecaa0d9093e06b8e2))
+No user-facing changes.
 
 ## [0.1.9](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.8...scaleway-operator-v0.1.9) (2026-05-22)
 
 ### Features
 
-* **reconcilers:** add LoadBalancer reconciler with create/sync/delete lifecycle ([#33](https://github.com/mathieubodin/scaleway-operator/issues/33)) ([a6c78d2](https://github.com/mathieubodin/scaleway-operator/commit/a6c78d288b2f692b759c5d8eda75888de7a71434))
-
-### Refactoring
-
-* **reconcilers:** extract pure decision layer with decide_next_action ([#29](https://github.com/mathieubodin/scaleway-operator/issues/29)) ([e55ef90](https://github.com/mathieubodin/scaleway-operator/commit/e55ef908967d3291d287274db26f5775fcc15cfc))
-
-### Documentation
-
-* **claude:** update CLAUDE.md with missing make targets and integration test instructions ([0b4fcda](https://github.com/mathieubodin/scaleway-operator/commit/0b4fcda9c48546280553b7ab084ce99ef648253f))
-* remove spurious blank lines in changelogs and docs ([15fa3ab](https://github.com/mathieubodin/scaleway-operator/commit/15fa3ab6589f2ae5b171e94574a48bf2bd5fdf80))
-* **solutions:** clarify release-please extra-files doc is preventative guidance ([ccdfbc8](https://github.com/mathieubodin/scaleway-operator/commit/ccdfbc8f69352830149cb6887d3c23dbee2d7201))
+* **loadbalancer:** reconcile `LoadBalancer` resources: create, sync and delete Scaleway Load Balancers ([#33](https://github.com/mathieubodin/scaleway-operator/issues/33))
 
 ## [0.1.8](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.7...scaleway-operator-v0.1.8) (2026-05-14)
 
 ### Features
 
-* **chart:** add NOTES.txt to scaleway-operator-crds with orphaned CRD removal instructions ([b57fa8a](https://github.com/mathieubodin/scaleway-operator/commit/b57fa8afb7437f0519f2936864645bbbcd3f8f17))
-* **metrics:** add instances_total gauge and circuit breaker state machine ([decf05f](https://github.com/mathieubodin/scaleway-operator/commit/decf05f9c78f504444b62dd60b03f5e033f096cf))
-* **reconcilers:** wire gauge updates and circuit breaker ([aa57d64](https://github.com/mathieubodin/scaleway-operator/commit/aa57d64f2e79b85df119cf948f9c3597bd236d7a))
+* **metrics:** add the `scaleway_operator_instances_total` gauge
+* **resilience:** stop calling the Scaleway API for a while after repeated failures (circuit breaker)
 
 ### Bug Fixes
 
-* add exponential backoff on transient reconciliation errors ([d8b6c09](https://github.com/mathieubodin/scaleway-operator/commit/d8b6c0935a628e1cef376029d2952fbdac3c78d8))
-* remove LoadBalancer and Project CRDs from Helm chart ([789a673](https://github.com/mathieubodin/scaleway-operator/commit/789a673cc425de85444d6ff840cecd2f9d14b55c))
-* remove orphaned CRDs and complete README onboarding docs ([a1a1b31](https://github.com/mathieubodin/scaleway-operator/commit/a1a1b3133e26ff3e17bdbef6b23342b755c012a2))
-* remove stale CRD YAMLs and correct ARCHITECTURE.md commands ([ff7065d](https://github.com/mathieubodin/scaleway-operator/commit/ff7065df65d50edbe89988dd2127ca09a8894a38))
-
-### Documentation
-
-* add ARCHITECTURE.md with extension guide ([f1ce625](https://github.com/mathieubodin/scaleway-operator/commit/f1ce6255c82bac84c4444813ebdb59da30bc709f))
-* add STRATEGY.md ([84473ca](https://github.com/mathieubodin/scaleway-operator/commit/84473ca2fc09eff24562e513d86e9c3234c92b77))
-* add STRATEGY.md ([09bef07](https://github.com/mathieubodin/scaleway-operator/commit/09bef07bf2906a3370ae7f4de51f3d9a38770e3f))
-* **chart:** update scaleway-operator-crds README to remove orphaned CRDs ([e33be55](https://github.com/mathieubodin/scaleway-operator/commit/e33be555124ca4669a2654d8e0218b8d726081d5))
-* remove manual run section from ARCHITECTURE.md ([9599743](https://github.com/mathieubodin/scaleway-operator/commit/9599743dde7690496332fbbe3184db9fa7bae27c))
-* replace cargo run --example crd_gen with make generate-crds ([5509066](https://github.com/mathieubodin/scaleway-operator/commit/5509066a4780ac048f495b1814830f7f114bd538))
-* **solutions:** add circuit breaker pattern and prometheus crate decision ([49a2f45](https://github.com/mathieubodin/scaleway-operator/commit/49a2f451a868fb0dba687791a4d7857f142f898e))
-* **solutions:** add circuit breaker pattern and prometheus crate decision ([a793855](https://github.com/mathieubodin/scaleway-operator/commit/a7938555a72e8b3426203014474784a01c7572f3))
-* update onboarding time target to &lt; 20 minutes ([1e3f47b](https://github.com/mathieubodin/scaleway-operator/commit/1e3f47bdf891c06888f10778661fec745bcefd46))
+* **reconciler:** back off exponentially on transient errors, from 30 seconds up to 5 minutes
 
 ## [0.1.7](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.6...scaleway-operator-v0.1.7) (2026-05-12)
 
-### Bug Fixes
-
-* **charts:** align appVersion with deployed binary version 0.1.6 ([a7b7ccf](https://github.com/mathieubodin/scaleway-operator/commit/a7b7ccfdf1b4a190deb6ad203f868ac9a2d2e4c1))
-* **release:** replace broken extra-files with post-release README sync job ([5c00738](https://github.com/mathieubodin/scaleway-operator/commit/5c0073825b947b523d1ca80a862036fcfe2c053b))
-* **release:** replace broken extra-files with post-release README version sync ([0e4ff63](https://github.com/mathieubodin/scaleway-operator/commit/0e4ff63ce9dcb8b66e5b110e6d0f6198bc0e9b4e))
-* **release:** use package-relative path for extra-files README ([b17dcc6](https://github.com/mathieubodin/scaleway-operator/commit/b17dcc6b7cfcbb45655afd72679ce2fd361c42d3))
-
-### Documentation
-
-* **readme:** improve installation section + fix charts appVersion ([12d21c4](https://github.com/mathieubodin/scaleway-operator/commit/12d21c43b700ca6b14676fd87398a8321093faf9))
-* **readme:** improve installation section for new users ([67009b2](https://github.com/mathieubodin/scaleway-operator/commit/67009b2e4a20463e670f6fe8a79270af0965a053))
-* **readme:** update installation with validated helm OCI commands ([05bc37a](https://github.com/mathieubodin/scaleway-operator/commit/05bc37a37290457fc26b1a50054b1e27e30f0476))
-* **solutions:** add two bash and documentation editing conventions ([cd6387b](https://github.com/mathieubodin/scaleway-operator/commit/cd6387b6f8ea1b583b30009de5dbff896f5af09e))
-* **solutions:** document release-please extra-files generic updater constraints ([a3833d5](https://github.com/mathieubodin/scaleway-operator/commit/a3833d58779ed3e307e1664845662c0c58e642a8))
-* **solutions:** refresh 3 stale learnings + add 4 new installation debug docs ([d20c1d5](https://github.com/mathieubodin/scaleway-operator/commit/d20c1d5af55c680633e42eee162745d018750b2c))
+No user-facing changes.
 
 ## [0.1.6](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.5...scaleway-operator-v0.1.6) (2026-05-11)
 
 ### Bug Fixes
 
-* **server:** add heartbeat ticker to keep /readyz alive with no instances ([5c3337c](https://github.com/mathieubodin/scaleway-operator/commit/5c3337c9970dba55db9469bc969a693dff34e74c))
-* **server:** trigger rebuild for heartbeat fix ([72c6f70](https://github.com/mathieubodin/scaleway-operator/commit/72c6f70e941fa0393fc1b4f534a3640f93c67cda))
+* **server:** keep `/readyz` healthy when no resource is being reconciled
 
 ## [0.1.5](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.4...scaleway-operator-v0.1.5) (2026-05-11)
 
 ### Bug Fixes
 
-* **server:** initialize last_reconcile_at to now at startup ([0f796e6](https://github.com/mathieubodin/scaleway-operator/commit/0f796e6b62eb1115099879788b67f5be42b21d5c))
-* **server:** trigger rebuild for readyz startup fix ([bd8a65a](https://github.com/mathieubodin/scaleway-operator/commit/bd8a65aa4e2216b122472f5add870064ca42c67c))
+* **server:** report ready right after startup instead of waiting for the first reconciliation
 
 ## [0.1.4](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.3...scaleway-operator-v0.1.4) (2026-05-11)
 
 ### Bug Fixes
 
-* **docker:** trigger rebuild with numeric UID fix ([3f1fc1c](https://github.com/mathieubodin/scaleway-operator/commit/3f1fc1c9682c5416541133a9894b549f802f4026))
-* **docker:** use numeric UID 65532 for operator user ([5a5b894](https://github.com/mathieubodin/scaleway-operator/commit/5a5b89413e58f6119c36840c3713310578531405))
+* **image:** run as the numeric UID 65532, so Kubernetes can enforce `runAsNonRoot`
 
 ## [0.1.3](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.2...scaleway-operator-v0.1.3) (2026-05-11)
 
 ### Bug Fixes
 
-* **ci:** add attestations: write permission to build-and-push job ([f75ee2b](https://github.com/mathieubodin/scaleway-operator/commit/f75ee2bfca2336a887f617df0d58d09aa6a69d9f))
-* **ci:** correct Docker image tagging and attestation in release pipeline ([4667c72](https://github.com/mathieubodin/scaleway-operator/commit/4667c7226f1e940e18039b319d615008bc872847))
-* **ci:** use version output instead of tag_name for Docker image tags ([73ea488](https://github.com/mathieubodin/scaleway-operator/commit/73ea488105a395ad22713962f8e1c6376937ab63))
+* **image:** tag the image with the plain version (`0.1.3`) instead of the release tag, and publish its build attestation
 
 ## [0.1.2](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.1...scaleway-operator-v0.1.2) (2026-05-11)
 
 ### Features
 
-* **make:** add check-kubeconfig guard and run-integration-test-locally ([9538540](https://github.com/mathieubodin/scaleway-operator/commit/95385407b4392a301d43cf261cdc89338de703f0))
-* **metrics:** add metrics module with ReconcileOutcome and OperatorMetrics ([ece2411](https://github.com/mathieubodin/scaleway-operator/commit/ece241116dd908234ccb740b8cd3c6c222ea49b3))
-* **metrics:** extend Context with OperatorMetrics and last_reconcile_at ([649d39e](https://github.com/mathieubodin/scaleway-operator/commit/649d39e856e420e9aa66388321b3cb616a77c0b3))
-* **metrics:** instrument reconcilers with error counter and ReconcileMeasurer RAII ([4d143fe](https://github.com/mathieubodin/scaleway-operator/commit/4d143feca16b1d0ae7811bf80ad3c637cc36abb6))
-* **metrics:** prometheus observability and axum health server ([ab714db](https://github.com/mathieubodin/scaleway-operator/commit/ab714db615b0883c4d138772a1b899341f2525d6))
-* **metrics:** replace health server with axum — /healthz, /readyz, /metrics, /log-level ([3461b2b](https://github.com/mathieubodin/scaleway-operator/commit/3461b2b1d812eca4938b10ceee8a68f263d3d33d))
-
-### Bug Fixes
-
-* **ci:** pin cosign binary to v2.5.2 for cosign-installer v4 upgrade ([0d051cf](https://github.com/mathieubodin/scaleway-operator/commit/0d051cf4ff4de3c0241ed857c8e809def2307607))
-* **make:** add --namespace scaleway-system to deploy-crds ([13bbaad](https://github.com/mathieubodin/scaleway-operator/commit/13bbaadc04607127228f502f0ec560b3cea67290))
-* **make:** deploy-crds via helm template | kubectl apply ([da1956b](https://github.com/mathieubodin/scaleway-operator/commit/da1956b19c96be486827e1ed1ca1d4671f8bd547))
-* **metrics:** add as_str() to ReconcileOutcome, update CLAUDE.md modules ([e25ad7d](https://github.com/mathieubodin/scaleway-operator/commit/e25ad7dc1dfd2aef702067a241df1397e93a3085))
-* **metrics:** address 4 code review findings ([3409c9e](https://github.com/mathieubodin/scaleway-operator/commit/3409c9ed7c21202e4ea09694000e78291d641c9e))
-* **release:** correct changelog-path in release-please-config for helm packages ([b34195e](https://github.com/mathieubodin/scaleway-operator/commit/b34195e0103f5a383a8442c8f1536d58ae47a483))
-
-### Refactoring
-
-* **metrics:** simplify and fix code quality issues ([fe6beff](https://github.com/mathieubodin/scaleway-operator/commit/fe6beff2c487d6fbf1e249c789122c76321b54ad))
-
-### Documentation
-
-* **deploy:** document required RBAC for helm deploy and add manifest ([67bf6c2](https://github.com/mathieubodin/scaleway-operator/commit/67bf6c2c741b159e2ebba2958c78dae981747524))
+* **server:** expose `/healthz`, `/readyz`, `/metrics` and `/log-level` on the operator HTTP server
+* **metrics:** add Prometheus metrics for reconciliation errors and duration
 
 ## [0.1.1](https://github.com/mathieubodin/scaleway-operator/compare/scaleway-operator-v0.1.0...scaleway-operator-v0.1.1) (2026-05-09)
 
 ### Features
 
-* **ci:** add GitHub Actions release workflow with cosign signing ([464c5f5](https://github.com/mathieubodin/scaleway-operator/commit/464c5f5671c0db3e0fe8c263bb31808b9b83c01e))
-* **ci:** publish Helm charts as OCI artifacts to GHCR ([b005b5b](https://github.com/mathieubodin/scaleway-operator/commit/b005b5b8a36d904a4313fcc217f9d10e090060f9))
-* **context:** add scaleway_base_url field to Context for testable namespace client injection ([8d6f3d3](https://github.com/mathieubodin/scaleway-operator/commit/8d6f3d3024eba5d30b0c4987bec00e70b98bb750))
-* **docker:** rewrite Dockerfile with cargo-chef and cargo-zigbuild ([e29472b](https://github.com/mathieubodin/scaleway-operator/commit/e29472b3d6009c9fa6818462c9c2430e6ffe98f8))
-* **helm:** add scaleway-operator chart ([2b75c7a](https://github.com/mathieubodin/scaleway-operator/commit/2b75c7a0d04e9426c1ca22d37874b46d96937483))
-* **helm:** add scaleway-operator-crds chart ([e6f0f14](https://github.com/mathieubodin/scaleway-operator/commit/e6f0f14cb85a54d9889845946f35fd47ac3122de))
-* **k8s:** add crd-gen example and generate CRD manifests ([ea53033](https://github.com/mathieubodin/scaleway-operator/commit/ea530337d4fcef56ea04a6c240baff2ebcf15b80))
-* **k8s:** add deployment manifest with RBAC and secretKeyRef injection ([8cba1d1](https://github.com/mathieubodin/scaleway-operator/commit/8cba1d1a97f61b730b8dc3970cecf9b532c0bb8e))
-* **registry:** update REGISTRY to GHCR and deployment image ref ([69102a5](https://github.com/mathieubodin/scaleway-operator/commit/69102a58fcbd4eb4a224047cae87d1382837648d))
-* release pipeline, Helm charts, domain fix, and CI hardening ([4403d6f](https://github.com/mathieubodin/scaleway-operator/commit/4403d6f3f746543758176b42fa49eab2be3405c5))
-* **tests:** add integration test infrastructure with TestFixture, k8s helpers, and all test scenarios ([a7528af](https://github.com/mathieubodin/scaleway-operator/commit/a7528aff2954665c75dd7159833b561f729d586a))
+* **image:** publish a multi-arch image (amd64, arm64) on GHCR, signed with cosign
+* **charts:** publish the `scaleway-operator` and `scaleway-operator-crds` Helm charts as OCI artifacts on GHCR
 
 ### Bug Fixes
 
-* **ci:** per-job permissions, pin actions to SHA, fix helm login and packaging ([d3e740d](https://github.com/mathieubodin/scaleway-operator/commit/d3e740d67b3f3f2ffb33043e6e004644c0887dc3))
-* **domain:** rename scaleway.io → scaleway.mathieubodin.io across codebase ([6cf0d6a](https://github.com/mathieubodin/scaleway-operator/commit/6cf0d6ac914d668d12040f6cc47c2d58c1f9f5d4))
-* **lint:** resolve dead_code and clippy warnings to pass make check ([fe72315](https://github.com/mathieubodin/scaleway-operator/commit/fe7231569fab6271e94621af10e594e6c728fa55))
-* **make:** deterministic chart selection, remove --force, KUBECONFIG variable ([2cfe907](https://github.com/mathieubodin/scaleway-operator/commit/2cfe9074cfc6e03172d59cd9e72c4e8c1928fbfa))
-* **reconciler:** use ns_client in handle_deletion, handle InstanceNotFound, sanitize status errors ([c478ab2](https://github.com/mathieubodin/scaleway-operator/commit/c478ab20cba9692129adcf62960cba9261cd0350))
-* rename CRD label key and refactor check-helm to tool-guard only ([ac5f35f](https://github.com/mathieubodin/scaleway-operator/commit/ac5f35fd1c9bb04c8b99ccca0f61ddda39855f93))
-* **review:** address code review findings — safety, tests, reliability ([b9581e7](https://github.com/mathieubodin/scaleway-operator/commit/b9581e7ebb89a7f9cef5133548419ec3be7d9f21))
-* **review:** address remaining 3 deferred findings ([98e9c8c](https://github.com/mathieubodin/scaleway-operator/commit/98e9c8cc77444cc2a7d9008e74fab4d945f6a4dc))
-* separate changelogs, TARGETPLATFORM default, Helm schema validation ([bae58b7](https://github.com/mathieubodin/scaleway-operator/commit/bae58b76240b8c13fe664ec74b722b9deef04c31))
-* **tests:** support KUBE_API_URL env var for kubectl proxy (default: localhost:8001) ([763328a](https://github.com/mathieubodin/scaleway-operator/commit/763328a895ae55dda9026817a3a19807f12cfe90))
-* **tests:** use pre-created fixtures via YAML, no k8s resource creation from test code ([7d61dfa](https://github.com/mathieubodin/scaleway-operator/commit/7d61dfac27a7811e5e946192f527196e03c91dcb))
+* **instance:** delete instances with the namespace credentials, accept an instance already gone, and keep internal URLs out of `status.error_message`
 
-### Refactoring
+### Upgrade notes
 
-* **lib:** export modules from lib.rs for integration test access ([efb83ac](https://github.com/mathieubodin/scaleway-operator/commit/efb83ac052b130e0bf604d79764db0b744b2ed6e))
-
-### Documentation
-
-* mark k8s manifests plan as completed ([84a0663](https://github.com/mathieubodin/scaleway-operator/commit/84a0663ad5a98a34eda3e8f652508e672a0ab2cc))
-* **readme:** add end-to-end deployment tutorial with lifecycle state diagram ([d58b8d5](https://github.com/mathieubodin/scaleway-operator/commit/d58b8d53a8b99e1a6e013aa24a6dbebd776b1f81))
-* **solutions:** add Makefile guard pattern convention and extend domain doc ([babbe37](https://github.com/mathieubodin/scaleway-operator/commit/babbe37e59786ffe7473cba85d1ce78b4196f6e6))
-* **solutions:** document Kubernetes CRD API group domain ownership convention ([5a7f980](https://github.com/mathieubodin/scaleway-operator/commit/5a7f980e61142d3d88095293f63e523a1eabb737))
+* The API group is renamed from `scaleway.io` to `scaleway.mathieubodin.io`. Existing resources must be recreated under the new group.

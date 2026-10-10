@@ -20,8 +20,12 @@ qui réconcilie des Custom Resources avec l'API Scaleway. Docs et commentaires e
   de `charts/scaleway-operator/templates/`.
 - **Constantes de domaine.** Le groupe d'API `scaleway.mathieubodin.io`, l'annotation
   `scaleway.mathieubodin.io/project-id` et les finalizers doivent rester identiques entre code, charts et docs.
-- **Commits conventionnels obligatoires.** release-please calcule versions et changelogs à partir
-  du type de commit. Ne jamais éditer un `CHANGELOG.md` à la main.
+- **Le titre de la PR fait la release.** Les PRs sont mergées en squash : le titre devient le commit sur `main`,
+  et release-please en tire versions et changelogs. `feat` et `fix` sont réservés à ce qui change pour un
+  utilisateur de l'opérateur ou des charts. Outillage, CI, tests et documentation se titrent `chore`, `ci`,
+  `test` ou `docs`, qui ne produisent ni version ni entrée de changelog.
+- **Changelogs.** Ils ne listent que les changements visibles par un utilisateur. Ne jamais éditer un
+  `CHANGELOG.md` à la main, sauf réécriture décidée par le mainteneur.
 
 ## Où trouver quoi
 
