@@ -2,7 +2,7 @@
 
 ## Do not expose in .PHONY, targets without a ## description
 
-.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind release-prepare release-publish report-tokens
+.PHONY: help build check coverage coverage-json coverage-text coverage-kind coverage-kind-json coverage-kind-text coverage-lcov coverage-kind-lcov env-check image-build image-push deploy deploy-crds deploy-status helm-template helm-crds-template helm-crds-package helm-package test-integration-kind release-prepare release-publish report-tokens sync-pr-metadata
 
 REGISTRY ?= ghcr.io/mathieubodin
 IMAGE_NAME ?= scaleway-operator
@@ -146,6 +146,9 @@ release-publish: check-gh check-npx ## Crée tags et releases de la PR de releas
 
 report-tokens: check-gh check-jq ## Reporte les tokens produits pour une PR dans le Project (PR=<numéro>, branche courante par défaut)
 	bash scripts/report-tokens.sh $(PR)
+
+sync-pr-metadata: check-gh check-jq ## Recopie sur une PR le milestone, les labels et le Project de son issue (PR=<numéro>)
+	bash scripts/sync-pr-metadata.sh $(PR)
 
 coverage: check-llvm-cov ## Teste l'application et produit un rapport HTML
 	mkdir -p $(COVERAGE_DIR)

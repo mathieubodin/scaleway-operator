@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Reporte le coût en tokens d'une PR dans le champ Tokens du Project GitHub,
-# pour chaque issue liée par `Closes #N`.
+# Reporte le coût en tokens d'une PR dans le champ Tokens de son élément du Project GitHub,
+# celui qu'affiche le panneau « Projects » de la PR.
+#
+# Le coût est porté par la PR et non par l'issue : une PR qui ferme plusieurs issues
+# n'est comptée qu'une fois, et une issue traitée par plusieurs PRs ne perd aucun relevé.
 #
 # Chiffre retenu : les tokens produits par l'assistant (output_tokens), sous-agents
 # compris. Les tokens de cache sont exclus : ils dépendent des pauses dans la session,
@@ -12,6 +15,7 @@
 # Usage :
 #   scripts/report-tokens.sh [PR]     relevé manuel (PR de la branche courante par défaut)
 #   scripts/report-tokens.sh --hook   appelé par un hook PostToolUse de Claude Code
+#                                     (lance aussi sync-pr-metadata.sh après `gh pr create`)
 set -euo pipefail
 
 PROJECT_OWNER="mathieubodin"
@@ -37,6 +41,10 @@ if [ "${1:-}" = "--hook" ]; then
         *) exit 0 ;;
     esac
     transcript=$(jq -r '.transcript_path // ""' <<<"$input")
+    # À l'ouverture d'une PR, lui recopier d'abord les métadonnées de son issue.
+    case "$command" in
+        *"gh pr create"*) bash scripts/sync-pr-metadata.sh || true ;;
+    esac
 else
     pr="${1:-}"
 fi
@@ -87,20 +95,9 @@ jq --arg s "$session" --arg pr "$pr" --arg since "$since" --arg now "$now" --arg
 # Une PR travaillée sur plusieurs sessions cumule leurs relevés.
 total=$(jq --arg pr "$pr" '.prs[$pr] | add' "$STATE_FILE")
 
-issues=$(gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number')
-if [ -z "$issues" ]; then
-    echo "[tokens] PR #${pr} : ${total} tokens produits, aucune issue liée par Closes."
-    exit 0
-fi
-
-items=$(gh project item-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --limit 500 --format json)
-for issue in $issues; do
-    item_id=$(jq -r --argjson n "$issue" '.items[] | select(.content.number == $n) | .id' <<<"$items")
-    if [ -z "$item_id" ]; then
-        echo "[tokens] issue #${issue} absente du Project, ignorée." >&2
-        continue
-    fi
-    gh project item-edit --project-id "$PROJECT_ID" --id "$item_id" \
-        --field-id "$TOKENS_FIELD_ID" --number "$total" >/dev/null
-    echo "[tokens] PR #${pr} → issue #${issue} : ${total} tokens produits."
-done
+# `item-add` est idempotent : il renvoie l'élément existant si la PR est déjà dans le Project.
+pr_url=$(gh pr view "$pr" --json url --jq '.url')
+item_id=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --url "$pr_url" --format json --jq '.id')
+gh project item-edit --project-id "$PROJECT_ID" --id "$item_id" \
+    --field-id "$TOKENS_FIELD_ID" --number "$total" >/dev/null
+echo "[tokens] PR #${pr} : ${total} tokens produits."
