@@ -70,7 +70,7 @@ Le script `scripts/test-integration-kind.sh` orchestre le cycle complet :
 
 #### Architecture des fixtures
 
-Les tests ne créent que des objets `Instance` — les namespaces, NamespaceRoles et Secrets sont pré-créés par `k8s/test-fixtures.yaml` (appliqué automatiquement par le script) :
+Les tests créent leurs propres ressources (`Instance`, `ScalewaySecret` et son Secret source). Les namespaces, NamespaceRoles et Secrets IAM sont pré-créés par `k8s/test-fixtures.yaml` (appliqué automatiquement par le script) :
 
 | Namespace | Annotation | NamespaceRole | Secret IAM | Utilisé pour |
 | --- | --- | --- | --- | --- |

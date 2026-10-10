@@ -1,13 +1,14 @@
 ---
 title: "Un test d'intégration en scaffold doit être ajouté à la liste --skip du script kind"
 date: 2026-10-09
+last_updated: 2026-10-10
 category: docs/solutions/conventions/
 module: integration-tests
 problem_type: convention
 component: testing_framework
 severity: high
 applies_when:
-  - "On ajoute dans tests/integration.rs un test incomplet qui se termine par unimplemented!() ou todo!()"
+  - "On ajoute dans tests/integration/ un test incomplet qui se termine par unimplemented!() ou todo!()"
   - "On marque un test #[ignore] en pensant l'exclure de la CI"
   - "On relit une PR dont seuls lint et unit-tests tournent"
 tags:
@@ -45,11 +46,11 @@ Un test d'intégration incomplet doit suivre l'une de ces deux règles :
 
 ```bash
 cargo test --test integration -- --ignored \
-    --skip test_loadbalancer_create_sync_delete \
-    --skip test_scalewaysecret_create_with_mock_scaleway_writes_status
+    --skip load_balancer::sync::create_sync_delete \
+    --skip scaleway_secret::sync::mon_test_en_scaffold
 ```
 
-Avant de merger une PR qui touche `tests/integration.rs`, lancer `make test-integration-kind` en local :
+Avant de merger une PR qui touche `tests/integration/`, lancer `make test-integration-kind` en local :
 c'est le seul contrôle qui exécute ces tests avant `main`.
 
 ## Why This Matters
@@ -60,7 +61,7 @@ une intention d'exclusion que le script ne respecte pas.
 
 ## When to Apply
 
-- À chaque ajout d'un test dans `tests/integration.rs` qui n'est pas encore complet.
+- À chaque ajout d'un test dans `tests/integration/` qui n'est pas encore complet.
 - En review, dès qu'un test contient `unimplemented!()`, `todo!()` ou un `TODO` à la place de ses assertions.
 - Quand on retire un `--skip` : vérifier que le test passe réellement sur kind.
 
@@ -70,14 +71,13 @@ Liste des tests que le job d'intégration va réellement exécuter :
 
 ```bash
 cargo test --test integration -- --ignored \
-    --skip test_loadbalancer_create_sync_delete \
-    --skip test_scalewaysecret_create_with_mock_scaleway_writes_status --list
+    --skip load_balancer::sync::create_sync_delete --list
 ```
 
 Recherche des scaffolds restants :
 
 ```bash
-grep -n 'unimplemented!\|todo!' tests/integration.rs
+grep -rn 'unimplemented!\|todo!' tests/integration/
 ```
 
 ## Related

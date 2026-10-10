@@ -211,22 +211,34 @@ Pour les tests de `reconcilers.rs`, utiliser `make_test_context()` (défini dans
 
 ### Tests d'intégration
 
-Dans `tests/integration.rs` — nécessitent un cluster Kubernetes accessible et les CRDs déployées. Ils sont marqués `#[ignore]` et s'exécutent localement uniquement.
-
-Lancer en une commande (déploie les CRDs + fixtures + lance les tests) :
-
-```bash
-make run-integration-test-locally
-```
-
-Ou étape par étape :
+Dans `tests/integration/`. Ils exécutent les reconcilers contre un vrai cluster Kubernetes, avec une API Scaleway
+simulée par mockito. Ils sont marqués `#[ignore]` pour ne tourner que dans ce contexte.
 
 ```bash
-kubectl proxy --port=8001 &
-make deploy-crds
-make deploy-test-fixtures
-make test-integration
+make test-integration-kind
 ```
+
+La cible crée un cluster kind éphémère, y déploie les CRDs et `k8s/test-fixtures.yaml`, lance les tests, puis détruit le cluster.
+
+Le dossier suit le même schéma pour chaque ressource :
+
+```text
+tests/integration/
+├── main.rs                  point d'entrée, liste des modules
+├── support/                 connexion au cluster, namespaces de test, fausses réponses Scaleway
+└── <ressource>/             instance, load_balancer, scaleway_secret
+    ├── mod.rs               construction et nettoyage des objets de la ressource
+    ├── sync.rs              création, adoption, synchronisation
+    ├── authorization.rs     rôle du namespace, autorisations
+    ├── errors.rs            prérequis manquants, erreurs de l'API Scaleway
+    └── deletion.rs          finalizer et suppression
+```
+
+Une ressource n'a que les fichiers dont elle a besoin. Le nom complet d'un test se lit comme un chemin,
+par exemple `scaleway_secret::authorization::viewer_role_cannot_sync`.
+
+Chaque test crée ses propres ressources et les supprime en fin de test. Un test incomplet doit être ajouté
+à la liste `--skip` de `scripts/test-integration-kind.sh` : `#[ignore]` ne l'exclut pas.
 
 ### Régénérer les fichiers CRD YAML
 
