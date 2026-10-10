@@ -186,6 +186,20 @@ impl TestFixture {
         (name, rv)
     }
 
+    /// Pose sur un Secret source existant le label et l'annotation qui autorisent `cr_name`.
+    pub async fn grant_opt_in(&self, secret_name: &str, cr_name: &str) {
+        let api: Api<Secret> = Api::namespaced(self.client.clone(), self.ns);
+        let patch = serde_json::json!({
+            "metadata": {
+                "labels": { OPT_IN_LABEL: "true" },
+                "annotations": { ALLOWED_CR_ANNOTATION: format!("{}/{}", self.ns, cr_name) },
+            }
+        });
+        api.patch(secret_name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .unwrap_or_else(|e| panic!("grant_opt_in({}) failed: {}", secret_name, e));
+    }
+
     pub async fn cleanup_source_secret(&self, name: &str) {
         let api: Api<Secret> = Api::namespaced(self.client.clone(), self.ns);
         let _ = api.delete(name, &DeleteParams::default()).await;

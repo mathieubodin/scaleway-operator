@@ -239,12 +239,10 @@ async fn get_namespace_client(ctx: &Arc<Context>, namespace: &str) -> Result<Sca
     let secret_name = format!("scaleway-ns-creds-{}", namespace);
     let secrets_api: Api<Secret> = Api::namespaced(ctx.client.clone(), NAMESPACE_CREDS_NS);
 
-    let secret = secrets_api.get(&secret_name).await.map_err(|_| {
-        OperatorError::ConfigError(format!(
-            "Secret '{secret_name}' not found in namespace '{NAMESPACE_CREDS_NS}'. \
-             An admin must pre-provision IAM credentials for this namespace.",
-        ))
-    })?;
+    let secret = secrets_api
+        .get(&secret_name)
+        .await
+        .map_err(|e| map_namespace_creds_error(e, &secret_name))?;
 
     let secret_key = secret
         .data
@@ -267,6 +265,21 @@ async fn get_namespace_client(ctx: &Arc<Context>, namespace: &str) -> Result<Sca
         secret_key,
         ctx.scaleway_base_url.clone(),
     ))
+}
+
+/// Traduit une erreur de lecture du Secret de credentials du namespace.
+///
+/// - 404 → `ConfigError` permanent (un admin doit provisionner les credentials)
+/// - autre → `KubeError` transitoire : une indisponibilité de l'API server ne doit pas
+///   arrêter la réconciliation jusqu'à la prochaine modification du CR
+fn map_namespace_creds_error(e: kube::error::Error, secret_name: &str) -> OperatorError {
+    match e {
+        kube::error::Error::Api(ae) if ae.code == 404 => OperatorError::ConfigError(format!(
+            "Secret '{secret_name}' not found in namespace '{NAMESPACE_CREDS_NS}'. \
+             An admin must pre-provision IAM credentials for this namespace.",
+        )),
+        other => OperatorError::KubeError(other),
+    }
 }
 
 /// Récupérer le project_id depuis l'annotation du namespace pour n'importe quelle ressource.
@@ -1384,17 +1397,19 @@ fn is_cr_allowed_for_secret(
 /// Mappe l'erreur d'un `get` sur l'API K8s vers une erreur métier explicite.
 /// Fonction pure — testable unitairement avec des `kube::error::Error::Api` fabriqués.
 ///
-/// - 403 → `ConfigError` permanent (l'opérateur n'a pas le droit de lire les Secrets dans ce
-///   namespace ; le namespace n'est probablement pas bootstrappé)
+/// - 403 → `SecretAccessDenied` permanent (l'opérateur n'a pas le droit de lire les Secrets dans
+///   ce namespace ; le namespace n'est probablement pas bootstrappé), revérifié périodiquement
 /// - 404 → `SecretNotFound` transitoire (le Secret peut être créé plus tard)
 /// - autre → `KubeError` transitoire
 fn map_kube_get_error(e: kube::error::Error, ks_name: &str, namespace: &str) -> OperatorError {
     match e {
-        kube::error::Error::Api(ae) if ae.code == 403 => OperatorError::ConfigError(format!(
-            "Operator forbidden to read Secrets in namespace '{}' \
+        kube::error::Error::Api(ae) if ae.code == 403 => {
+            OperatorError::SecretAccessDenied(format!(
+                "Operator forbidden to read Secrets in namespace '{}' \
              (RBAC denied — verify the namespace is bootstrapped)",
-            namespace
-        )),
+                namespace
+            ))
+        }
         kube::error::Error::Api(ae) if ae.code == 404 => OperatorError::SecretNotFound(format!(
             "Kubernetes Secret '{}' not found in namespace '{}'",
             ks_name, namespace
@@ -1808,6 +1823,11 @@ async fn reconcile_scaleway_secret_inner(
                     // `Revoked` sans toucher les autres branches d'erreur, qui
                     // continuent l'anonymisation SEC-002 via record_source_error_in_status.
                     if matches!(&e, OperatorError::SecretOptInMissing(_)) {
+                        // Déjà révoqué : la revérification périodique ne doit pas rappeler
+                        // Scaleway à chaque passage.
+                        if current_status.sync_state == "Revoked" {
+                            return Err(e);
+                        }
                         if let Some(sid) = current_status.scaleway_id.clone() {
                             // Tant que la révocation n'a pas abouti, on renvoie son erreur
                             // (transitoire côté Scaleway) pour qu'elle soit retentée.
@@ -2196,6 +2216,12 @@ async fn reconcile_scaleway_secret_inner(
                             return Err(e);
                         }
                     }
+                    // Erreur passagère de l'API server : retenter plutôt que retirer le
+                    // finalizer en laissant le secret Scaleway derrière soi.
+                    Err(e) if !e.is_permanent_error() => {
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        return Err(e);
+                    }
                     Err(e) => {
                         tracing::warn!(
                             name = %secret_cr.name_any(),
@@ -2285,7 +2311,14 @@ async fn update_secret_status(
 }
 
 fn error_policy_inner(key: String, error: &OperatorError, ctx: &Arc<Context>) -> Action {
-    if error.is_permanent_error() {
+    if let Some(interval) = error.recheck_interval() {
+        tracing::warn!(
+            error = %error,
+            recheck_in_secs = interval.as_secs(),
+            "Source Secret not usable — will recheck"
+        );
+        Action::requeue(interval)
+    } else if error.is_permanent_error() {
         tracing::warn!(error = %error, "Permanent configuration error — waiting for spec change");
         Action::await_change()
     } else {
@@ -3013,6 +3046,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_error_policy_source_side_error_rechecks_at_fixed_interval() {
+        let ctx = make_test_context();
+        let err = OperatorError::SecretOptInMissing("no label".to_string());
+
+        // Ni await_change (la correction du Secret ne serait jamais vue), ni backoff croissant.
+        for _ in 0..3 {
+            let action = error_policy("scalewayssecret", dummy_instance(), &err, ctx.clone());
+            assert_eq!(
+                action,
+                Action::requeue(crate::error::SOURCE_RECHECK_INTERVAL)
+            );
+        }
+    }
+
+    #[test]
+    fn test_map_namespace_creds_error_404_is_permanent_config_error() {
+        let mapped = map_namespace_creds_error(api_error(404), "scaleway-ns-creds-team-a");
+        assert!(
+            matches!(mapped, OperatorError::ConfigError(_)),
+            "{mapped:?}"
+        );
+        assert!(mapped.is_permanent_error());
+    }
+
+    #[test]
+    fn test_map_namespace_creds_error_other_is_transient() {
+        for code in [500, 503] {
+            let mapped = map_namespace_creds_error(api_error(code), "scaleway-ns-creds-team-a");
+            assert!(matches!(mapped, OperatorError::KubeError(_)), "{mapped:?}");
+            assert!(!mapped.is_permanent_error(), "{code} must be retried");
+        }
+    }
+
+    #[tokio::test]
     async fn test_error_policy_circuit_breaker_returns_requeue() {
         let ctx = make_test_context();
         let err = OperatorError::CircuitBreakerOpen;
@@ -3303,10 +3370,10 @@ mod tests {
     }
 
     #[test]
-    fn test_map_kube_get_error_403_returns_config_error_permanent() {
+    fn test_map_kube_get_error_403_returns_access_denied_permanent() {
         let mapped = map_kube_get_error(api_error(403), "db-pass", "team-a");
-        let OperatorError::ConfigError(msg) = &mapped else {
-            panic!("expected ConfigError, got {mapped:?}");
+        let OperatorError::SecretAccessDenied(msg) = &mapped else {
+            panic!("expected SecretAccessDenied, got {mapped:?}");
         };
         assert!(
             msg.contains("RBAC denied"),

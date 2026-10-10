@@ -115,8 +115,12 @@ Chaque namespace qui héberge des ressources de l'opérateur doit avoir :
 
 |Catégorie|Variants|Comportement|
 |---|---|---|
-|**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `InvalidLbType`, `ProjectAccessDenied`, `SecretSourceNotConfigured`, `SecretOptInMissing`, `SecretKeyNotFound`|`Action::await_change()` — pas de retry, attend une modification du CR|
+|**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `InvalidLbType`, `ProjectAccessDenied`, `SecretSourceNotConfigured`, `SecretOptInMissing`, `SecretKeyNotFound`, `SecretAccessDenied`|`Action::await_change()` — pas de retry, attend une modification du CR|
 |**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
+
+**Revérification :** `SecretOptInMissing`, `SecretKeyNotFound` et `SecretAccessDenied` sont permanentes mais se corrigent
+sur le Secret source ou son RBAC, que le controller ne surveille pas. `error_policy` les revérifie toutes les 5 minutes
+(`OperatorError::recheck_interval`) au lieu d'attendre une modification du CR.
 
 **Règle :** une erreur est permanente si et seulement si un retry immédiat ne peut pas la résoudre — c'est-à-dire si elle nécessite une action de l'utilisateur (corriger le spec, créer une ressource manquante).
 
