@@ -19,5 +19,6 @@
 
 mod instance;
 mod load_balancer;
+mod rdb;
 mod scaleway_secret;
 mod support;

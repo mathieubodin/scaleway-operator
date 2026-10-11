@@ -1,5 +1,5 @@
 use kube::core::CustomResourceExt;
-use scaleway_operator::resources::{Instance, LoadBalancer, NamespaceRole, ScalewaySecret};
+use scaleway_operator::resources::{Instance, LoadBalancer, NamespaceRole, Rdb, ScalewaySecret};
 use std::fs;
 
 fn main() {
@@ -9,6 +9,7 @@ fn main() {
     write_crd("k8s/crd-loadbalancer.yaml", &LoadBalancer::crd(), None);
     write_crd("k8s/crd-namespacerole.yaml", &NamespaceRole::crd(), None);
     write_crd("k8s/crd-scalewayssecret.yaml", &ScalewaySecret::crd(), None);
+    write_crd("k8s/crd-rdb.yaml", &Rdb::crd(), None);
 
     println!("CRDs generated in k8s/");
 }

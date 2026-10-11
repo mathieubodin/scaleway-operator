@@ -7,8 +7,8 @@ Ce document est le point d'entrée pour contribuer à l'opérateur : il décrit 
 ```text
 main.rs          — Point d'entrée : initialise le Context, lance le Controller kube-rs et le serveur axum
 context.rs       — Struct Context partagé entre tous les réconciliateurs (client k8s, client Scaleway, métriques, backoff)
-resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, LoadBalancer, ScalewaySecret, NamespaceRole
-reconcilers.rs   — Logique de réconciliation pour Instance, LoadBalancer et ScalewaySecret ; error_policy commune
+resources.rs     — Définitions des CRDs via #[derive(CustomResource)] : Instance, LoadBalancer, ScalewaySecret, RDB, NamespaceRole
+reconcilers.rs   — Logique de réconciliation pour Instance, LoadBalancer, ScalewaySecret et RDB ; error_policy commune
 scaleway.rs      — ScalewayClient : wrappeur reqwest sur l'API REST Scaleway
 error.rs         — OperatorError enum (10 variants actives + FinalizationError réservé) + sanitization pour le status CRD
 metrics.rs       — Compteurs et histogrammes Prometheus + ReconcileMeasurer (RAII timer)
@@ -121,6 +121,53 @@ L'annotation empêche un autre CR du namespace de réutiliser un Secret déjà l
 Le droit de lecture vient d'un Role `get secrets` par namespace, créé par `namespace-bootstrap.yaml` :
 le ClusterRole de l'opérateur ne donne aucun accès aux Secrets.
 
+## Flux de réconciliation — RDB
+
+`RDB` provisionne une instance de base de données managée. Le kind est `RDB`, le type Rust `Rdb`.
+
+```text
+1. valider spec.region   → ConfigError (permanent), suppression comprise
+   valider spec.tags     → hors suppression ; ConfigError (permanent) si un tag est réservé à l'opérateur
+2. get NamespaceRole     → hors suppression ; project_id lu sur l'annotation du namespace
+3. deletion_timestamp ?  → deletion_policy Delete : DELETE de l'instance, puis retrait du finalizer
+                           scaleway.mathieubodin.io/rdb-finalizer ; Retain : retrait du finalizer seul
+4. ajouter finalizer     → requeue 5s
+5. instance connue ?     → GET, mise à jour du status, signalement des dérives, requeue 30s
+6. rôle en lecture seule → ConfigError (permanent) : rien à créer
+7. adopter ou créer      → recherche par tags opérateur ; sinon lecture du mot de passe et création
+```
+
+`sync_state` prend les valeurs suivantes :
+
+| Valeur | Sens |
+| --- | --- |
+| `Pending` | Rien n'est créé : le `ScalewaySecret` du mot de passe n'existe pas ou n'est pas `Synced` |
+| `Syncing` | Instance créée ou adoptée, pas encore `ready` côté Scaleway |
+| `Synced` | Instance `ready` |
+| `ConfigDrift` | Le moteur de l'instance n'est plus celui du spec |
+| `Error` | Dernier appel en échec, détail dans `error_message` |
+| `Deleting` | Scaleway a refusé la suppression (4xx), nouvelle tentative toutes les 30 secondes |
+
+**Mot de passe.** Il est lu dans Secret Manager à partir du `ScalewaySecret` référencé, uniquement quand il faut créer
+l'instance : une instance adoptée a déjà le sien. Tant que le `ScalewaySecret` n'est pas `Synced`, le reconcile
+renvoie `ScalewaySecretNotReady`, revérifié toutes les 30 secondes car le controller RDB ne surveille pas les
+`ScalewaySecret`.
+
+**Idempotence.** L'instance porte les mêmes tags opérateur qu'un secret (namespace et nom du CR). Si la création
+réussit mais que l'écriture du status échoue, le tour suivant retrouve l'instance par ses tags au lieu d'en créer
+une seconde. Plusieurs instances portant ces tags sont une erreur permanente : en adopter une au hasard pourrait
+être faux. Avant d'adopter ou de créer, le reconciler vérifie comme pour `ScalewaySecret` que son CR n'est pas
+issu d'un cache en retard.
+
+**Dérives.** L'opérateur ne modifie jamais une instance existante. Un écart sur `node_type`, `is_ha_cluster` ou
+`volume_size_gb` est écrit dans `status.drift_message` et émis en Event Warning `SpecDrift`, une seule fois par
+apparition ou changement ; `sync_state` reste `Synced`. Un écart sur `engine` passe en `ConfigDrift` :
+`spec.engine` reste modifiable pour suivre une montée de version faite côté Scaleway, alors que `spec.region` et
+`spec.admin_user` sont immuables par règle CEL.
+
+**Instance disparue.** Un 404 sur une instance connue efface son identifiant du status ; le tour suivant en crée
+une nouvelle, vide.
+
 ## Prérequis par namespace
 
 Chaque namespace qui héberge des ressources de l'opérateur doit avoir :
@@ -137,11 +184,13 @@ Chaque namespace qui héberge des ressources de l'opérateur doit avoir :
 |Catégorie|Variants|Comportement|
 |---|---|---|
 |**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `InvalidLbType`, `ProjectAccessDenied`, `SecretSourceNotConfigured`, `SecretOptInMissing`, `SecretKeyNotFound`, `SecretAccessDenied`|`Action::await_change()` — pas de retry, attend une modification du CR|
-|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
+|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `RdbNotFound`, `ScalewaySecretNotReady`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
 
 **Revérification :** `SecretOptInMissing`, `SecretKeyNotFound` et `SecretAccessDenied` sont permanentes mais se corrigent
 sur le Secret source ou son RBAC, que le controller ne surveille pas. `error_policy` les revérifie toutes les 5 minutes
 (`OperatorError::recheck_interval`) au lieu d'attendre une modification du CR.
+`ScalewaySecretNotReady` est transitoire mais revérifiée toutes les 30 secondes par le même mécanisme : le backoff
+retarderait la création d'une instance RDB jusqu'à cinq minutes après que son `ScalewaySecret` est prêt.
 
 **Règle :** une erreur est permanente si et seulement si un retry immédiat ne peut pas la résoudre — c'est-à-dire si elle nécessite une action de l'utilisateur (corriger le spec, créer une ressource manquante).
 

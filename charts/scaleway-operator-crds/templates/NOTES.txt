@@ -4,6 +4,7 @@ CRDs actives
 ============
   - instances.scaleway.mathieubodin.io
   - namespaceroles.scaleway.mathieubodin.io
+  - rdbs.scaleway.mathieubodin.io
 
 MIGRATION — suppression des CRDs orphelines
 ============================================
