@@ -500,6 +500,11 @@ impl ScalewayClient {
         ]
     }
 
+    /// Vrai pour un tag que seul l'opérateur doit poser : ceux de `secret_operator_tags`.
+    pub fn is_reserved_secret_tag(tag: &str) -> bool {
+        tag == "managed-by=scaleway-operator" || tag.starts_with("scaleway-operator-cr-")
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_scaleway_secret(
         &self,

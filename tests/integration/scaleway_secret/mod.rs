@@ -214,6 +214,19 @@ impl TestFixture {
             .unwrap_or_else(|e| panic!("set_scaleway_secret_status({}) failed: {}", name, e));
     }
 
+    /// Modifie des champs du spec, et rend la réponse de l'API server telle quelle
+    /// pour pouvoir vérifier un refus de validation.
+    pub async fn patch_scaleway_secret_spec(
+        &self,
+        name: &str,
+        spec: serde_json::Value,
+    ) -> Result<ScalewaySecret, kube::Error> {
+        let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
+        let patch = serde_json::json!({ "spec": spec });
+        api.patch(name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+    }
+
     pub async fn get_scaleway_secret(&self, name: &str) -> ScalewaySecret {
         let api: Api<ScalewaySecret> = Api::namespaced(self.client.clone(), self.ns);
         api.get(name)

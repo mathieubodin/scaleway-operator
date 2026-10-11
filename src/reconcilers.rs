@@ -1334,6 +1334,8 @@ async fn validate_lb_spec(
 
 const OPT_IN_LABEL: &str = "scaleway.mathieubodin.io/allow-operator-read";
 const ALLOWED_CR_ANNOTATION: &str = "scaleway.mathieubodin.io/allowed-cr";
+/// Délai avant de relancer un reconcile parti d'un cache en retard sur l'API server.
+const STALE_CACHE_REQUEUE: Duration = Duration::from_secs(5);
 const STATUS_ERROR_GENERIC: &str = "Source Secret unavailable (see operator logs)";
 /// Message générique du status `Revoked` : informe l'utilisateur que la
 /// révocation a été appliquée côté Scaleway et indique le geste de
@@ -1610,6 +1612,60 @@ async fn record_source_error_in_status(
     let _ = update_secret_status(secret_cr, api, status).await;
 }
 
+/// Pose `Error` et le message de `error` sur le status, sans toucher aux champs de suivi
+/// (`scaleway_id`, `current_version`, `last_synced_resource_version`).
+async fn record_error_in_status(
+    secret_cr: &ScalewaySecret,
+    api: &Api<ScalewaySecret>,
+    current_status: &ScalewaySecretStatus,
+    error: &OperatorError,
+) {
+    let mut status = current_status.clone();
+    status.error_message = Some(error.for_status());
+    status.sync_state = "Error".to_string();
+    let _ = update_secret_status(secret_cr, api, status).await;
+}
+
+/// Status à écrire quand il n'y a rien à pousser, ou `None` s'il est déjà à jour.
+///
+/// Une erreur passée (lecture du Secret source, rôle, appel Scaleway) laisse `Error` dans
+/// le status : sans cette remise à `Synced`, il y resterait alors que tout est synchronisé.
+/// Enregistre aussi la generation d'un secret synchronisé avant qu'elle soit suivie.
+fn build_already_synced_status(
+    current_status: &ScalewaySecretStatus,
+    generation: Option<i64>,
+) -> Option<ScalewaySecretStatus> {
+    let mut status = current_status.clone();
+    status.sync_state = "Synced".to_string();
+    status.error_message = None;
+    if status.observed_generation.is_none() {
+        status.observed_generation = generation;
+    }
+    (status != *current_status).then_some(status)
+}
+
+/// Premier tag de `spec.tags` réservé à l'opérateur, s'il y en a un.
+///
+/// L'adoption retrouve un secret Scaleway par ses tags d'opérateur : un CR qui porterait
+/// ceux d'un autre CR ferait adopter son secret par ce dernier.
+fn find_reserved_tag(tags: &[String]) -> Option<&str> {
+    tags.iter()
+        .map(String::as_str)
+        .find(|tag| ScalewayClient::is_reserved_secret_tag(tag))
+}
+
+/// Vrai si le CR reçu du cache du controller est celui que porte l'API server.
+///
+/// À vérifier avant de pousser une version : un status écrit par le reconcile précédent
+/// mais pas encore vu par le cache ferait pousser une seconde version identique.
+async fn is_cached_cr_current(
+    secret_cr: &ScalewaySecret,
+    api: &Api<ScalewaySecret>,
+) -> Result<bool> {
+    let live = api.get(&secret_cr.name_any()).await?;
+    Ok(live.metadata.resource_version == secret_cr.metadata.resource_version)
+}
+
 /// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
 struct SecretReconcileInput {
     deletion_requested: bool,
@@ -1759,6 +1815,18 @@ async fn reconcile_scaleway_secret_inner(
         status.sync_state = "Error".to_string();
         let _ = update_secret_status(&secret_cr, &api, status).await;
         return Err(e);
+    }
+
+    // Les tags ne servent qu'à la création : une suppression ne doit pas en dépendre.
+    if !deletion_requested {
+        if let Some(tag) = find_reserved_tag(&secret_cr.spec.tags) {
+            let e = OperatorError::ConfigError(format!(
+                "spec.tags contains '{}', which is reserved for the operator.",
+                tag
+            ));
+            record_error_in_status(&secret_cr, &api, &current_status, &e).await;
+            return Err(e);
+        }
     }
 
     // Un rôle en lecture seule ne doit ni créer ni versionner de secret. La suppression
@@ -1932,6 +2000,9 @@ async fn reconcile_scaleway_secret_inner(
         }
 
         SecretReconcileDecision::CreateAndSyncSecret => {
+            if !is_cached_cr_current(&secret_cr, &api).await? {
+                return Ok(Action::requeue(STALE_CACHE_REQUEUE));
+            }
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
 
             let project_id =
@@ -1961,7 +2032,7 @@ async fn reconcile_scaleway_secret_inner(
 
             // Adoption : chercher un secret Scaleway existant avec les tags opérateur
             let cr_name = secret_cr.name_any();
-            let scaleway_id = match call_scaleway(&ctx, || {
+            let found = match call_scaleway(&ctx, || {
                 ns_client.find_scaleway_secret_by_tags(
                     &secret_cr.spec.region,
                     &project_id,
@@ -1969,8 +2040,16 @@ async fn reconcile_scaleway_secret_inner(
                     &cr_name,
                 )
             })
-            .await?
+            .await
             {
+                Ok(found) => found,
+                Err(e) => {
+                    record_error_in_status(&secret_cr, &api, &current_status, &e).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+            let scaleway_id = match found {
                 Some(existing_id) => {
                     tracing::warn!(
                         name = %cr_name,
@@ -1979,7 +2058,7 @@ async fn reconcile_scaleway_secret_inner(
                     );
                     existing_id
                 }
-                None => call_scaleway(&ctx, || {
+                None => match call_scaleway(&ctx, || {
                     ns_client.create_scaleway_secret(
                         &secret_cr.spec.region,
                         &secret_cr.spec.name,
@@ -1991,9 +2070,14 @@ async fn reconcile_scaleway_secret_inner(
                     )
                 })
                 .await
-                .inspect_err(|_| {
-                    measurer.set_outcome(ReconcileOutcome::Error);
-                })?,
+                {
+                    Ok(created_id) => created_id,
+                    Err(e) => {
+                        record_error_in_status(&secret_cr, &api, &current_status, &e).await;
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        return Err(e);
+                    }
+                },
             };
 
             // Reserve-intent (issue #117) : ancrer le `scaleway_id` dans le status K8s
@@ -2090,6 +2174,9 @@ async fn reconcile_scaleway_secret_inner(
         }
 
         SecretReconcileDecision::PushNewVersion { scaleway_id } => {
+            if !is_cached_cr_current(&secret_cr, &api).await? {
+                return Ok(Action::requeue(STALE_CACHE_REQUEUE));
+            }
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
 
             let ns_client = match get_namespace_client(&ctx, &namespace).await {
@@ -2124,13 +2211,18 @@ async fn reconcile_scaleway_secret_inner(
             // dans le même appel (`disable_previous`). Si le patch du status ci-dessous
             // échoue, le prochain reconcile poussera une version de plus, qui désactivera
             // à son tour celle-ci : il ne reste jamais qu'une version active (issue #117).
-            let new_revision = call_scaleway(&ctx, || {
+            let new_revision = match call_scaleway(&ctx, || {
                 ns_client.create_secret_version(&secret_cr.spec.region, &scaleway_id, &payload)
             })
             .await
-            .inspect_err(|_| {
-                measurer.set_outcome(ReconcileOutcome::Error);
-            })?;
+            {
+                Ok(revision) => revision,
+                Err(e) => {
+                    record_error_in_status(&secret_cr, &api, &current_status, &e).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
 
             let mut status = current_status;
             status.current_version = Some(new_revision);
@@ -2146,11 +2238,9 @@ async fn reconcile_scaleway_secret_inner(
 
         SecretReconcileDecision::AlreadySynced => {
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
-            // Secret synchronisé avant que la generation soit suivie : l'enregistrer une fois,
-            // pour que le prochain changement de spec soit détecté.
-            if current_status.observed_generation.is_none() {
-                let mut status = current_status;
-                status.observed_generation = secret_cr.metadata.generation;
+            if let Some(status) =
+                build_already_synced_status(&current_status, secret_cr.metadata.generation)
+            {
                 update_secret_status(&secret_cr, &api, status)
                     .await
                     .inspect_err(|_| {
@@ -3916,5 +4006,79 @@ mod tests {
             decide_next_action_secret(&input),
             SecretReconcileDecision::DeleteSecret
         ));
+    }
+
+    fn error_status_after_sync() -> ScalewaySecretStatus {
+        ScalewaySecretStatus {
+            scaleway_id: Some("sec-1".to_string()),
+            current_version: Some(3),
+            last_synced_resource_version: Some("42".to_string()),
+            observed_generation: Some(2),
+            sync_state: "Error".to_string(),
+            error_message: Some(STATUS_ERROR_GENERIC.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_already_synced_status_clears_a_past_error() {
+        let current = error_status_after_sync();
+
+        let status = build_already_synced_status(&current, Some(2)).expect("status to write");
+
+        assert_eq!(status.sync_state, "Synced");
+        assert_eq!(status.error_message, None);
+        // Les champs de suivi ne bougent pas : rien n'a été poussé.
+        assert_eq!(status.scaleway_id, current.scaleway_id);
+        assert_eq!(status.current_version, current.current_version);
+        assert_eq!(
+            status.last_synced_resource_version,
+            current.last_synced_resource_version
+        );
+        assert_eq!(status.observed_generation, Some(2));
+    }
+
+    #[test]
+    fn test_already_synced_status_is_none_when_nothing_changes() {
+        let mut current = error_status_after_sync();
+        current.sync_state = "Synced".to_string();
+        current.error_message = None;
+
+        // Pas d'écriture à chaque requeue de 30 secondes.
+        assert_eq!(build_already_synced_status(&current, Some(2)), None);
+    }
+
+    #[test]
+    fn test_already_synced_status_records_an_untracked_generation() {
+        let mut current = error_status_after_sync();
+        current.sync_state = "Synced".to_string();
+        current.error_message = None;
+        current.observed_generation = None;
+
+        let status = build_already_synced_status(&current, Some(5)).expect("status to write");
+
+        assert_eq!(status.observed_generation, Some(5));
+    }
+
+    #[test]
+    fn test_find_reserved_tag_reports_operator_tags() {
+        for reserved in [
+            "managed-by=scaleway-operator",
+            "scaleway-operator-cr-namespace=other-ns",
+            "scaleway-operator-cr-name=other-cr",
+        ] {
+            let tags = vec!["team=payments".to_string(), reserved.to_string()];
+            assert_eq!(find_reserved_tag(&tags), Some(reserved), "{reserved}");
+        }
+    }
+
+    #[test]
+    fn test_find_reserved_tag_accepts_user_tags() {
+        let tags = vec![
+            "team=payments".to_string(),
+            "managed-by=terraform".to_string(),
+            "scaleway-operator".to_string(),
+        ];
+        assert_eq!(find_reserved_tag(&tags), None);
+        assert_eq!(find_reserved_tag(&[]), None);
     }
 }
