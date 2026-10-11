@@ -292,3 +292,53 @@ async fn status_without_observed_generation_records_it_without_repush() {
     assert_eq!(status.observed_generation, updated.metadata.generation);
     assert_eq!(status.current_version, Some(1));
 }
+
+#[tokio::test]
+#[ignore = "requires: make test-integration-kind"]
+async fn stale_cached_cr_does_not_push_a_second_version() {
+    let mut server = mockito::Server::new_async().await;
+    let any_get = server
+        .mock("GET", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+    let any_post = server
+        .mock("POST", mockito::Matcher::Any)
+        .expect(0)
+        .create_async()
+        .await;
+
+    let fixture = TestFixture::for_namespace(NS_EDITOR).await;
+    let name = unique_name("scw-secret-stale");
+    let (source, source_rv) = fixture.create_source_secret(&name, "password", true).await;
+    let created = fixture
+        .create_scaleway_secret(&name, &source, "password")
+        .await;
+    // Ce que voit le cache du controller : le status préliminaire de la création.
+    let mut reserved = synced_status("sec-stale", 1, &source_rv);
+    reserved.current_version = None;
+    reserved.last_synced_resource_version = None;
+    reserved.sync_state = "Syncing".to_string();
+    fixture.set_scaleway_secret_status(&name, reserved).await;
+    let cached = fixture.get_scaleway_secret(&name).await;
+    // Ce que porte déjà l'API server : la création s'est terminée.
+    let mut synced = synced_status("sec-stale", 1, &source_rv);
+    synced.observed_generation = created.metadata.generation;
+    fixture.set_scaleway_secret_status(&name, synced).await;
+    let ctx = fixture.ctx(&server.url());
+
+    let result =
+        scaleway_operator::reconcilers::reconcile_scaleway_secret(Arc::new(cached), ctx.clone())
+            .await;
+    let updated = fixture.get_scaleway_secret(&name).await;
+
+    fixture.cleanup_scaleway_secret(&name).await;
+    fixture.cleanup_source_secret(&source).await;
+
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+    any_get.assert_async().await;
+    any_post.assert_async().await;
+    let status = updated.status.expect("Expected status");
+    assert_eq!(status.sync_state, "Synced");
+    assert_eq!(status.current_version, Some(1));
+}

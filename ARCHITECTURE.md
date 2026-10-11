@@ -60,6 +60,7 @@ Il n'a pas de zone mais une région, et sa source vit dans le cluster.
 
 ```text
 1. valider spec.region   → ConfigError (permanent), suppression comprise : la région part dans le chemin des URLs
+   valider spec.tags     → hors suppression ; ConfigError (permanent) si un tag est réservé à l'opérateur
 2. get NamespaceRole     → hors suppression ; ConfigError (permanent) si absent ou en lecture seule
 3. lire le Secret source → un seul `get`, qui vérifie l'opt-in et fournit la valeur
                            SecretOptInMissing / SecretKeyNotFound (permanent), SecretNotFound (transitoire)
@@ -80,6 +81,22 @@ du Secret source. Le compromis est documenté dans
 Une seule version reste active. L'envoi d'une version et la mise à jour du status ne sont pas atomiques : si la seconde
 échoue, le tour suivant renvoie une version. Chaque création passe donc `disable_previous` à Scaleway, qui désactive la
 version précédente, connue ou non du status.
+
+Avant de créer un secret ou de pousser une version, le reconciler relit le CR sur l'API server. Si son `resourceVersion`
+diffère de celui reçu du cache du controller, il ne pousse rien et repasse 5 secondes plus tard : un status écrit par
+le tour précédent mais pas encore vu par le cache ferait pousser une seconde version identique.
+
+`spec.region` est immuable, par une règle CEL du CRD : l'opérateur ne déplace pas un secret d'une région à l'autre.
+
+### Révocation et suppression
+
+Seul le retrait du label ou de l'annotation d'opt-in désactive la version Scaleway. Un Secret source supprimé, ou que
+l'opérateur n'a plus le droit de lire, passe le CR en `Error` et laisse la version active : une rotation par suppression
+puis recréation du Secret, ou un redéploiement du RBAC, ne doit pas couper les consommateurs du secret.
+
+À la suppression du CR, le secret Scaleway est supprimé avant le retrait du finalizer. Si les credentials du namespace
+(`scaleway-ns-creds-<namespace>`) sont absents, l'appel Scaleway est impossible : le finalizer est retiré et le secret
+reste dans Scaleway, comme pour `Instance` et `LoadBalancer`. Son identifiant figure dans le log `warn` de l'opérateur.
 
 ### Opt-in du Secret source
 

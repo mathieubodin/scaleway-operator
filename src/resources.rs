@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use kube::CustomResource;
+use kube::{CustomResource, KubeSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -197,7 +197,7 @@ pub struct KubernetesSecretRef {
     pub key: String,
 }
 
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, KubeSchema)]
 #[kube(
     group = "scaleway.mathieubodin.io",
     version = "v1",
@@ -212,7 +212,9 @@ pub struct ScalewaySecretSpec {
     /// Nom du secret dans Scaleway Secret Manager
     pub name: String,
 
-    /// Région Scaleway (fr-par, nl-ams, pl-waw)
+    /// Région Scaleway (fr-par, nl-ams, pl-waw). Immuable : le secret Scaleway
+    /// resterait dans sa région d'origine.
+    #[x_kube(validation = ("self == oldSelf", "spec.region is immutable"))]
     pub region: String,
 
     /// Source de la valeur à synchroniser

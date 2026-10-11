@@ -245,6 +245,17 @@ spec:
       key: password
 ```
 
+À savoir avant de s'en servir :
+
+- `spec.region` ne se modifie pas après la création.
+- `spec.tags` ne peut pas contenir `managed-by=scaleway-operator` ni de tag préfixé par `scaleway-operator-cr-`,
+  réservés à l'opérateur.
+- Pour désactiver la version côté Scaleway sans supprimer le CR, retirer du Secret source le label
+  `scaleway.mathieubodin.io/allow-operator-read` ou l'annotation `scaleway.mathieubodin.io/allowed-cr` : le CR passe
+  en `Revoked`. Supprimer le Secret source ne désactive rien, le CR passe seulement en `Error`.
+- Supprimer le CR supprime le secret Scaleway. Si les credentials du namespace ont déjà été retirés, le secret
+  reste dans Scaleway et doit être supprimé à la main.
+
 ### Vérifier le statut
 
 ```bash
