@@ -26,6 +26,7 @@ L'opérateur réconcilie les Custom Resources suivantes :
 | `Instance` | Namespaced | Instance compute Scaleway (CRUD complet + synchronisation) |
 | `LoadBalancer` | Namespaced | Load Balancer Scaleway managé |
 | `ScalewaySecret` | Namespaced | Synchronisation d'un Secret Kubernetes vers Scaleway Secret Manager |
+| `RDB` | Namespaced | Instance de base de données managée (PostgreSQL, MySQL) |
 | `NamespaceRole` | Cluster-wide | Lie un namespace Kubernetes à un rôle IAM Scaleway (prérequis par namespace) |
 
 ## 📋 Prérequis
@@ -255,6 +256,45 @@ spec:
   en `Revoked`. Supprimer le Secret source ne désactive rien, le CR passe seulement en `Error`.
 - Supprimer le CR supprime le secret Scaleway. Si les credentials du namespace ont déjà été retirés, le secret
   reste dans Scaleway et doit être supprimé à la main.
+
+### Créer une base de données managée
+
+Le mot de passe administrateur vient d'un `ScalewaySecret` du même namespace, qui doit être `Synced`
+avant que l'instance soit créée.
+
+```yaml
+apiVersion: scaleway.mathieubodin.io/v1
+kind: RDB
+metadata:
+  name: my-postgres
+  namespace: production
+spec:
+  region: fr-par
+  engine: PostgreSQL-16
+  node_type: DB-DEV-S
+  admin_user: admin
+  admin_password_secret_ref:
+    name: db-sync
+  volume_type: bssd
+  volume_size_gb: 20
+  deletion_policy: Retain
+```
+
+À savoir avant de s'en servir :
+
+- La clé API du namespace doit porter les permissions `RelationalDatabasesFullAccess` et
+  `SecretManagerSecretAccess` sur le projet.
+- Le mot de passe doit respecter la politique Scaleway : 8 à 128 caractères, avec un chiffre, une majuscule,
+  une minuscule et un caractère spécial. Il n'est lu qu'à la création : le faire tourner dans le
+  `ScalewaySecret` ne change pas celui de l'instance.
+- `spec.region` et `spec.admin_user` ne se modifient pas après la création.
+- `volume_size_gb` est sans effet avec `volume_type: lssd`, dont la taille dépend du type de nœud.
+- L'opérateur n'applique pas un changement de `node_type`, `is_ha_cluster` ou `volume_size_gb` : l'écart avec
+  l'instance apparaît dans `status.drift_message` et dans un Event `SpecDrift`. Un `engine` différent de celui
+  de l'instance passe le CR en `ConfigDrift`.
+- **Supprimer le CR supprime l'instance et toutes ses données**, sans autre confirmation. Avec
+  `deletion_policy: Retain`, l'instance reste dans Scaleway et seul le CR disparaît. La valeur par défaut est
+  `Delete`.
 
 ### Vérifier le statut
 

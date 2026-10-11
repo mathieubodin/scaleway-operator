@@ -271,6 +271,154 @@ impl Default for ScalewaySecretStatus {
     }
 }
 
+// ============== RDB Resource ==============
+
+/// Référence à un CR `ScalewaySecret` du même namespace.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct ScalewaySecretRef {
+    /// Nom du CR ScalewaySecret
+    pub name: String,
+}
+
+/// Sort de l'instance Scaleway quand le CR est supprimé.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+pub enum DeletionPolicy {
+    /// Supprime l'instance et toutes ses données.
+    #[default]
+    Delete,
+    /// Laisse l'instance en place et retire seulement le finalizer.
+    Retain,
+}
+
+fn default_volume_type() -> String {
+    "lssd".to_string()
+}
+
+#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, KubeSchema)]
+#[kube(
+    group = "scaleway.mathieubodin.io",
+    version = "v1",
+    kind = "RDB",
+    root = "Rdb"
+)]
+#[kube(namespaced)]
+#[kube(status = "RdbStatus")]
+#[kube(printcolumn = r#"{"name":"Scaleway ID","type":"string","jsonPath":".status.scaleway_id"}"#)]
+#[kube(printcolumn = r#"{"name":"State","type":"string","jsonPath":".status.state"}"#)]
+#[kube(printcolumn = r#"{"name":"Endpoint","type":"string","jsonPath":".status.endpoint_ip"}"#)]
+#[kube(printcolumn = r#"{"name":"Sync","type":"string","jsonPath":".status.sync_state"}"#)]
+pub struct RdbSpec {
+    /// Région Scaleway (fr-par, nl-ams, pl-waw). Immuable : l'opérateur ne déplace pas
+    /// une instance d'une région à l'autre.
+    #[x_kube(validation = ("self == oldSelf", "spec.region is immutable"))]
+    pub region: String,
+
+    /// Moteur et version (PostgreSQL-16, MySQL-8, etc.)
+    pub engine: String,
+
+    /// Type de nœud (DB-DEV-S, DB-GP-XS, etc.)
+    pub node_type: String,
+
+    /// Utilisateur administrateur créé avec l'instance. Immuable.
+    #[x_kube(validation = ("self == oldSelf", "spec.admin_user is immutable"))]
+    pub admin_user: String,
+
+    /// ScalewaySecret qui porte le mot de passe administrateur. Lu une seule fois,
+    /// à la création de l'instance.
+    pub admin_password_secret_ref: ScalewaySecretRef,
+
+    /// Taille du volume en Go. Sans effet avec un volume `lssd`, dont la taille
+    /// dépend du type de nœud.
+    #[serde(default)]
+    pub volume_size_gb: Option<u32>,
+
+    /// Type de volume (lssd, bssd, sbs_5k, sbs_15k)
+    #[serde(default = "default_volume_type")]
+    pub volume_type: String,
+
+    /// Haute disponibilité
+    #[serde(default)]
+    pub is_ha_cluster: bool,
+
+    /// Désactive les sauvegardes automatiques
+    #[serde(default)]
+    pub disable_backup: bool,
+
+    /// Tags supplémentaires (en plus des tags operator injectés à la création)
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Sort de l'instance Scaleway à la suppression du CR (Delete ou Retain)
+    #[serde(default)]
+    pub deletion_policy: DeletionPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct RdbStatus {
+    /// ID Scaleway de l'instance
+    #[serde(default)]
+    pub scaleway_id: Option<String>,
+
+    /// État de l'instance côté Scaleway (provisioning, ready, error, etc.)
+    #[serde(default)]
+    pub state: String,
+
+    /// Adresse IP du point d'accès
+    #[serde(default)]
+    pub endpoint_ip: Option<String>,
+
+    /// Port du point d'accès
+    #[serde(default)]
+    pub endpoint_port: Option<u16>,
+
+    /// Moteur réellement porté par l'instance
+    #[serde(default)]
+    pub engine: Option<String>,
+
+    /// Type de nœud réellement porté par l'instance
+    #[serde(default)]
+    pub node_type: Option<String>,
+
+    /// ID du projet Scaleway (pour tracking)
+    #[serde(default)]
+    pub project_id: Option<String>,
+
+    /// Timestamp de création
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+
+    /// État de la synchronisation (Pending, Syncing, Synced, ConfigDrift, Error, Deleting)
+    #[serde(default)]
+    pub sync_state: String,
+
+    /// Message d'erreur si applicable
+    #[serde(default)]
+    pub error_message: Option<String>,
+
+    /// Écart entre le spec et l'instance sur un champ modifiable (node_type, HA, volume).
+    /// L'opérateur le signale sans le corriger.
+    #[serde(default)]
+    pub drift_message: Option<String>,
+}
+
+impl Default for RdbStatus {
+    fn default() -> Self {
+        Self {
+            scaleway_id: None,
+            state: String::new(),
+            endpoint_ip: None,
+            endpoint_port: None,
+            engine: None,
+            node_type: None,
+            project_id: None,
+            created_at: None,
+            sync_state: "Pending".to_string(),
+            error_message: None,
+            drift_message: None,
+        }
+    }
+}
+
 // ============== NamespaceRole Resource (Cluster-wide) ==============
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]

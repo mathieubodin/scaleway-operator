@@ -1,5 +1,11 @@
 Scaleway Operator {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
 
+WARNING — RDB DATA LOSS
+=======================
+Deleting an RDB custom resource deletes the Scaleway Database Instance and all its
+data, without further confirmation. Set spec.deletion_policy: Retain on any RDB
+whose data must survive the deletion of its custom resource or of its namespace.
+
 VERIFY OPERATOR STATUS
 ======================
   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "scaleway-operator.fullname" . }}

@@ -63,6 +63,14 @@ pub enum OperatorError {
     #[error("Secret access denied: {0}")]
     SecretAccessDenied(String),
 
+    #[error("RDB instance not found: {0}")]
+    RdbNotFound(String),
+
+    /// Le ScalewaySecret référencé n'existe pas encore ou n'est pas `Synced`.
+    /// Attente normale à la création : revérifié à intervalle court.
+    #[error("ScalewaySecret not ready: {0}")]
+    ScalewaySecretNotReady(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 
@@ -74,6 +82,9 @@ pub type Result<T> = std::result::Result<T, OperatorError>;
 
 /// Fréquence de revérification du Secret source après une erreur permanente côté source.
 pub const SOURCE_RECHECK_INTERVAL: Duration = Duration::from_secs(300);
+
+/// Fréquence de revérification d'un ScalewaySecret attendu par une autre ressource.
+pub const SECRET_READY_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 impl OperatorError {
     /// Returns the PascalCase variant name for use as a Prometheus label.
@@ -96,6 +107,8 @@ impl OperatorError {
             OperatorError::SecretOptInMissing(_) => "SecretOptInMissing",
             OperatorError::SecretKeyNotFound(_) => "SecretKeyNotFound",
             OperatorError::SecretAccessDenied(_) => "SecretAccessDenied",
+            OperatorError::RdbNotFound(_) => "RdbNotFound",
+            OperatorError::ScalewaySecretNotReady(_) => "ScalewaySecretNotReady",
             OperatorError::Unknown(_) => "Unknown",
             OperatorError::CircuitBreakerOpen => "CircuitBreakerOpen",
         }
@@ -119,14 +132,18 @@ impl OperatorError {
         )
     }
 
-    /// Délai avant de revérifier une erreur permanente dont la correction ne passe pas par
-    /// le CR : le Secret source ou son RBAC. Le controller ne surveille pas les Secrets,
-    /// donc sans revérification la correction ne serait jamais vue.
+    /// Délai fixe avant de revérifier une erreur dont la résolution ne passe pas par le CR :
+    /// le Secret source ou son RBAC (permanentes), ou un ScalewaySecret attendu (transitoire).
+    /// Le controller ne surveille pas ces objets, donc sans revérification leur changement
+    /// ne serait jamais vu, ou trop tard.
     pub fn recheck_interval(&self) -> Option<Duration> {
         match self {
             OperatorError::SecretOptInMissing(_)
             | OperatorError::SecretKeyNotFound(_)
             | OperatorError::SecretAccessDenied(_) => Some(SOURCE_RECHECK_INTERVAL),
+            // Le controller RDB ne surveille pas les ScalewaySecret : sans revérification à
+            // délai fixe, le backoff retarderait la création jusqu'à cinq minutes.
+            OperatorError::ScalewaySecretNotReady(_) => Some(SECRET_READY_RECHECK_INTERVAL),
             _ => None,
         }
     }
@@ -137,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_recheck_interval_only_for_source_side_errors() {
+    fn test_recheck_interval_for_source_side_errors() {
         for err in [
             OperatorError::SecretOptInMissing("x".to_string()),
             OperatorError::SecretKeyNotFound("x".to_string()),
@@ -158,6 +175,18 @@ mod tests {
         ] {
             assert_eq!(err.recheck_interval(), None, "{err:?}");
         }
+    }
+
+    #[test]
+    fn test_scaleway_secret_not_ready_is_rechecked_quickly_without_being_permanent() {
+        let err = OperatorError::ScalewaySecretNotReady("x".to_string());
+        assert!(!err.is_permanent_error());
+        assert_eq!(err.recheck_interval(), Some(SECRET_READY_RECHECK_INTERVAL));
+        assert_eq!(err.metric_label(), "ScalewaySecretNotReady");
+        assert_eq!(
+            OperatorError::RdbNotFound("x".to_string()).metric_label(),
+            "RdbNotFound"
+        );
     }
 
     #[test]

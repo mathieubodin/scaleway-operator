@@ -3,15 +3,16 @@ use crate::context::{extract_project_id_from_namespace, get_scaleway_role_for_na
 use crate::error::{OperatorError, Result};
 use crate::metrics::{OperatorMetrics, ReconcileOutcome};
 use crate::resources::{
-    Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus, ScalewaySecret,
-    ScalewaySecretStatus,
+    DeletionPolicy, Instance, InstanceStatus, LoadBalancer, LoadBalancerStatus, Rdb, RdbSpec,
+    RdbStatus, ScalewaySecret, ScalewaySecretStatus,
 };
-use crate::scaleway::ScalewayClient;
+use crate::scaleway::{RdbCreateParams, RdbInstanceInfo, ScalewayClient};
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::Patch;
 use kube::runtime::controller::Action;
-use kube::{api::PatchParams, Api, ResourceExt};
+use kube::runtime::events::{Event, EventType, Recorder, Reporter};
+use kube::{api::PatchParams, Api, Resource, ResourceExt};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const INSTANCE_FINALIZER: &str = "scaleway.mathieubodin.io/instance-finalizer";
 const LB_FINALIZER: &str = "scaleway.mathieubodin.io/loadbalancer-finalizer";
 const SECRET_FINALIZER: &str = "scaleway.mathieubodin.io/secret-finalizer";
+const RDB_FINALIZER: &str = "scaleway.mathieubodin.io/rdb-finalizer";
 const NAMESPACE_CREDS_NS: &str = "scaleway-system";
 
 // ── ReconcileMeasurer — RAII timer that records duration + outcome ────────────
@@ -1656,14 +1658,14 @@ fn find_reserved_tag(tags: &[String]) -> Option<&str> {
 
 /// Vrai si le CR reçu du cache du controller est celui que porte l'API server.
 ///
-/// À vérifier avant de pousser une version : un status écrit par le reconcile précédent
-/// mais pas encore vu par le cache ferait pousser une seconde version identique.
-async fn is_cached_cr_current(
-    secret_cr: &ScalewaySecret,
-    api: &Api<ScalewaySecret>,
-) -> Result<bool> {
-    let live = api.get(&secret_cr.name_any()).await?;
-    Ok(live.metadata.resource_version == secret_cr.metadata.resource_version)
+/// À vérifier avant de muter Scaleway : un status écrit par le reconcile précédent
+/// mais pas encore vu par le cache ferait rejouer une création ou un envoi déjà faits.
+async fn is_cached_cr_current<K>(cr: &K, api: &Api<K>) -> Result<bool>
+where
+    K: Resource + Clone + serde::de::DeserializeOwned + std::fmt::Debug,
+{
+    let live = api.get(&cr.name_any()).await?;
+    Ok(live.meta().resource_version == cr.meta().resource_version)
 }
 
 /// Snapshot immuable pour la décision de réconciliation du ScalewaySecret.
@@ -2000,7 +2002,7 @@ async fn reconcile_scaleway_secret_inner(
         }
 
         SecretReconcileDecision::CreateAndSyncSecret => {
-            if !is_cached_cr_current(&secret_cr, &api).await? {
+            if !is_cached_cr_current(secret_cr.as_ref(), &api).await? {
                 return Ok(Action::requeue(STALE_CACHE_REQUEUE));
             }
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
@@ -2174,7 +2176,7 @@ async fn reconcile_scaleway_secret_inner(
         }
 
         SecretReconcileDecision::PushNewVersion { scaleway_id } => {
-            if !is_cached_cr_current(&secret_cr, &api).await? {
+            if !is_cached_cr_current(secret_cr.as_ref(), &api).await? {
                 return Ok(Action::requeue(STALE_CACHE_REQUEUE));
             }
             let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
@@ -2358,6 +2360,627 @@ async fn update_secret_status(
     let patch = serde_json::json!({ "status": status });
     api.patch_status(
         &secret_cr.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
+    Ok(())
+}
+
+// ── RDB reconciler ───────────────────────────────────────────────────────────
+
+/// L'API Scaleway compte les volumes en octets, en unités décimales.
+const BYTES_PER_GB: u64 = 1_000_000_000;
+
+/// Snapshot immuable pour la décision de réconciliation d'une instance RDB.
+struct RdbReconcileInput {
+    deletion_requested: bool,
+    circuit_open: bool,
+    finalizer_present: bool,
+    /// Le rôle du namespace autorise la création. Sans objet en suppression
+    /// ou circuit ouvert, où le rôle n'est pas lu.
+    role_allows_write: bool,
+    /// `spec.deletion_policy` vaut `Retain`.
+    retain_on_delete: bool,
+    /// ID Scaleway de l'instance, depuis le status.
+    scaleway_id: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RdbReconcileDecision {
+    SkipCircuitOpen,
+    AddFinalizer,
+    /// Rôle en lecture seule et aucune instance connue — erreur permanente.
+    BlockReadOnlyRole,
+    /// Aucune instance connue — adopter ou créer.
+    CreateInstance,
+    /// Instance connue — relever son état et signaler les dérives.
+    SyncInstance {
+        scaleway_id: String,
+    },
+    /// Suppression demandée, instance connue, politique `Delete`.
+    DeleteInstance {
+        scaleway_id: String,
+    },
+    /// Suppression sans instance connue, ou politique `Retain` — retirer le finalizer.
+    RemoveFinalizer,
+}
+
+fn decide_next_action_rdb(input: &RdbReconcileInput) -> RdbReconcileDecision {
+    // 1. Suppression prioritaire
+    if input.deletion_requested {
+        return match &input.scaleway_id {
+            Some(scaleway_id) if !input.retain_on_delete => RdbReconcileDecision::DeleteInstance {
+                scaleway_id: scaleway_id.clone(),
+            },
+            _ => RdbReconcileDecision::RemoveFinalizer,
+        };
+    }
+    // 2. Circuit breaker
+    if input.circuit_open {
+        return RdbReconcileDecision::SkipCircuitOpen;
+    }
+    // 3. Finalizer
+    if !input.finalizer_present {
+        return RdbReconcileDecision::AddFinalizer;
+    }
+    match &input.scaleway_id {
+        // 4. Instance connue — un rôle en lecture seule suffit à la suivre
+        Some(scaleway_id) => RdbReconcileDecision::SyncInstance {
+            scaleway_id: scaleway_id.clone(),
+        },
+        // 5. Rien à créer avec un rôle en lecture seule
+        None if !input.role_allows_write => RdbReconcileDecision::BlockReadOnlyRole,
+        // 6. Adopter ou créer
+        None => RdbReconcileDecision::CreateInstance,
+    }
+}
+
+/// Taille de volume à demander à Scaleway, ou `None` pour le laisser choisir :
+/// la taille d'un volume `lssd` dépend du type de nœud.
+fn rdb_requested_volume_bytes(spec: &RdbSpec) -> Option<u64> {
+    if spec.volume_type == "lssd" {
+        return None;
+    }
+    spec.volume_size_gb.map(|gb| u64::from(gb) * BYTES_PER_GB)
+}
+
+/// Écart sur le moteur entre le spec et l'instance. L'opérateur ne change pas le moteur
+/// d'une instance : c'est au spec de suivre une montée de version faite côté Scaleway.
+fn rdb_engine_drift(spec: &RdbSpec, info: &RdbInstanceInfo) -> Option<String> {
+    let actual = info.engine.as_deref()?;
+    (actual != spec.engine).then(|| {
+        format!(
+            "engine: spec '{}', Scaleway '{}'. The operator does not change the engine of an \
+             instance: update spec.engine to match.",
+            spec.engine, actual
+        )
+    })
+}
+
+/// Écarts sur les champs que Scaleway permet de modifier après la création.
+/// L'opérateur les signale sans les appliquer.
+fn rdb_mutable_drift(spec: &RdbSpec, info: &RdbInstanceInfo) -> Option<String> {
+    let mut drifts = Vec::new();
+    if let Some(actual) = info.node_type.as_deref() {
+        if actual != spec.node_type {
+            drifts.push(format!(
+                "node_type: spec '{}', Scaleway '{}'",
+                spec.node_type, actual
+            ));
+        }
+    }
+    if let Some(actual) = info.is_ha_cluster {
+        if actual != spec.is_ha_cluster {
+            drifts.push(format!(
+                "is_ha_cluster: spec {}, Scaleway {}",
+                spec.is_ha_cluster, actual
+            ));
+        }
+    }
+    if let (Some(wanted), Some(actual)) = (rdb_requested_volume_bytes(spec), info.volume_size_bytes)
+    {
+        if actual != wanted {
+            drifts.push(format!(
+                "volume_size_gb: spec {}, Scaleway {}",
+                wanted / BYTES_PER_GB,
+                actual / BYTES_PER_GB
+            ));
+        }
+    }
+    (!drifts.is_empty()).then(|| drifts.join("; "))
+}
+
+/// Status d'une instance relevée dans Scaleway.
+///
+/// `ConfigDrift` passe avant tout : le moteur ne correspond plus au spec. Sinon `Synced`
+/// quand l'instance est `ready`, `Syncing` tant qu'elle est dans un état transitoire.
+fn build_rdb_synced_status(
+    current_status: &RdbStatus,
+    spec: &RdbSpec,
+    info: &RdbInstanceInfo,
+    project_id: &str,
+) -> RdbStatus {
+    let mut status = current_status.clone();
+    status.state = info.state.clone();
+    status.endpoint_ip = info.endpoint_ip.clone();
+    status.endpoint_port = info.endpoint_port;
+    status.engine = info.engine.clone();
+    status.node_type = info.node_type.clone();
+    status.project_id = Some(project_id.to_string());
+    status.drift_message = rdb_mutable_drift(spec, info);
+    match rdb_engine_drift(spec, info) {
+        Some(drift) => {
+            status.sync_state = "ConfigDrift".to_string();
+            status.error_message = Some(drift);
+        }
+        None => {
+            status.sync_state = if info.state == "ready" {
+                "Synced"
+            } else {
+                "Syncing"
+            }
+            .to_string();
+            status.error_message = None;
+        }
+    }
+    status
+}
+
+/// Un Event n'est émis qu'à l'apparition ou au changement d'une dérive,
+/// pas à chaque requeue tant qu'elle dure.
+fn should_emit_drift_event(previous: Option<&str>, current: Option<&str>) -> bool {
+    current.is_some() && current != previous
+}
+
+/// `scaleway_id` et révision à lire d'un ScalewaySecret, s'il est synchronisé.
+fn synced_secret_version(status: Option<&ScalewaySecretStatus>) -> Option<(String, u32)> {
+    let status = status.filter(|s| s.sync_state == "Synced")?;
+    Some((status.scaleway_id.clone()?, status.current_version?))
+}
+
+/// Vrai pour un refus de Scaleway (4xx) : la demande ne passera pas mieux telle quelle.
+fn is_scaleway_client_error(error: &OperatorError) -> bool {
+    matches!(error, OperatorError::ScalewayError { status, .. } if status.starts_with('4'))
+}
+
+pub async fn reconcile_rdb(
+    rdb: Arc<Rdb>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let key = format!(
+        "rdb/{}/{}",
+        rdb.namespace().unwrap_or_default(),
+        rdb.name_any()
+    );
+    let result = reconcile_rdb_inner(rdb, ctx.clone()).await;
+    if result.is_ok() {
+        ctx.reset_retry_count(&key);
+    }
+    result
+}
+
+async fn reconcile_rdb_inner(
+    rdb: Arc<Rdb>,
+    ctx: Arc<Context>,
+) -> std::result::Result<Action, OperatorError> {
+    let namespace = rdb.namespace().unwrap_or_default();
+    let api: Api<Rdb> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    tracing::info!(
+        name = %rdb.name_any(),
+        namespace = %namespace,
+        "Reconciling RDB instance"
+    );
+
+    let deletion_requested = rdb.metadata.deletion_timestamp.is_some();
+    let circuit_open = ctx.is_circuit_open();
+    let finalizer_present = rdb
+        .metadata
+        .finalizers
+        .as_ref()
+        .unwrap_or(&vec![])
+        .contains(&RDB_FINALIZER.to_string());
+    let current_status = rdb.status.clone().unwrap_or_default();
+
+    // spec.region part dans le chemin des URLs Scaleway : la valider avant tout appel,
+    // suppression comprise.
+    if let Err(e) = ScalewayClient::validate_region(&rdb.spec.region) {
+        record_rdb_error(&rdb, &api, &current_status, &e).await;
+        return Err(e);
+    }
+
+    // Les tags ne servent qu'à la création : une suppression ne doit pas en dépendre.
+    if !deletion_requested {
+        if let Some(tag) = find_reserved_tag(&rdb.spec.tags) {
+            let e = OperatorError::ConfigError(format!(
+                "spec.tags contains '{}', which is reserved for the operator.",
+                tag
+            ));
+            record_rdb_error(&rdb, &api, &current_status, &e).await;
+            return Err(e);
+        }
+    }
+
+    let (role_allows_write, project_id) = if !deletion_requested && !circuit_open {
+        let role = match get_scaleway_role_for_namespace(&ctx.client, &namespace).await {
+            Ok(role) => role,
+            Err(e) => {
+                tracing::error!(name = %rdb.name_any(), namespace = %namespace, error = %e, "Cannot proceed without NamespaceRole");
+                record_rdb_error(&rdb, &api, &current_status, &e).await;
+                return Err(e);
+            }
+        };
+        let project_id = match get_project_id_from_namespace_resource(rdb.as_ref(), &ctx).await {
+            Ok(pid) if uuid::Uuid::parse_str(&pid).is_ok() => pid,
+            Ok(pid) => {
+                let e = OperatorError::ConfigError(format!(
+                    "Annotation 'scaleway.mathieubodin.io/project-id' must be a valid UUID, got: '{}'",
+                    pid
+                ));
+                record_rdb_error(&rdb, &api, &current_status, &e).await;
+                return Err(e);
+            }
+            Err(e) => {
+                record_rdb_error(&rdb, &api, &current_status, &e).await;
+                return Err(e);
+            }
+        };
+        (role_allows_write(&role), project_id)
+    } else {
+        (false, String::new())
+    };
+
+    let input = RdbReconcileInput {
+        deletion_requested,
+        circuit_open,
+        finalizer_present,
+        role_allows_write,
+        retain_on_delete: rdb.spec.deletion_policy == DeletionPolicy::Retain,
+        scaleway_id: current_status.scaleway_id.clone(),
+    };
+
+    match decide_next_action_rdb(&input) {
+        RdbReconcileDecision::SkipCircuitOpen => {
+            tracing::warn!(
+                name = %rdb.name_any(),
+                "Scaleway API circuit breaker is open — skipping RDB reconciliation"
+            );
+            Err(OperatorError::CircuitBreakerOpen)
+        }
+
+        RdbReconcileDecision::AddFinalizer => {
+            let mut finalizers = rdb.metadata.finalizers.clone().unwrap_or_default();
+            finalizers.push(RDB_FINALIZER.to_string());
+            patch_rdb_finalizers(&rdb, &api, finalizers).await?;
+            Ok(Action::requeue(Duration::from_secs(5)))
+        }
+
+        RdbReconcileDecision::BlockReadOnlyRole => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let e = OperatorError::ConfigError(
+                "The namespace role is read-only and cannot create Database Instances. \
+                 Use 'Editor' or 'Admin'."
+                    .to_string(),
+            );
+            record_rdb_error(&rdb, &api, &current_status, &e).await;
+            measurer.set_outcome(ReconcileOutcome::Error);
+            Err(e)
+        }
+
+        RdbReconcileDecision::CreateInstance => {
+            if !is_cached_cr_current(rdb.as_ref(), &api).await? {
+                return Ok(Action::requeue(STALE_CACHE_REQUEUE));
+            }
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            match execute_create_rdb(&rdb, &ctx, &namespace, &project_id).await {
+                Ok((scaleway_id, adopted)) => {
+                    let mut status = current_status;
+                    status.scaleway_id = Some(scaleway_id);
+                    status.project_id = Some(project_id);
+                    status.sync_state = "Syncing".to_string();
+                    status.error_message = None;
+                    if !adopted {
+                        status.state = "provisioning".to_string();
+                        status.created_at = Some(Utc::now());
+                    }
+                    measurer.set_outcome(if adopted {
+                        ReconcileOutcome::Adopted
+                    } else {
+                        ReconcileOutcome::Created
+                    });
+                    update_rdb_status(&rdb, &api, status)
+                        .await
+                        .inspect_err(|_| measurer.set_outcome(ReconcileOutcome::Error))?;
+                    Ok(Action::requeue(Duration::from_secs(30)))
+                }
+                Err(e) => {
+                    let mut status = current_status;
+                    status.error_message = Some(e.for_status());
+                    // Attendre son ScalewaySecret n'est pas une erreur de l'instance.
+                    status.sync_state = if matches!(e, OperatorError::ScalewaySecretNotReady(_)) {
+                        "Pending"
+                    } else {
+                        "Error"
+                    }
+                    .to_string();
+                    let _ = update_rdb_status(&rdb, &api, status).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    Err(e)
+                }
+            }
+        }
+
+        RdbReconcileDecision::SyncInstance { scaleway_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            let ns_client = match get_namespace_client(&ctx, &namespace).await {
+                Ok(c) => c,
+                Err(e) => {
+                    record_rdb_error(&rdb, &api, &current_status, &e).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+            };
+
+            match call_scaleway(&ctx, || {
+                ns_client.get_rdb_instance(&rdb.spec.region, &scaleway_id)
+            })
+            .await
+            {
+                Ok(info) => {
+                    let status =
+                        build_rdb_synced_status(&current_status, &rdb.spec, &info, &project_id);
+                    if should_emit_drift_event(
+                        current_status.drift_message.as_deref(),
+                        status.drift_message.as_deref(),
+                    ) {
+                        let drift = status.drift_message.as_deref().unwrap_or_default();
+                        tracing::warn!(name = %rdb.name_any(), drift = %drift, "RDB instance drifted from spec");
+                        publish_rdb_drift_event(&ctx, &rdb, drift).await;
+                    }
+                    if status != current_status {
+                        update_rdb_status(&rdb, &api, status)
+                            .await
+                            .inspect_err(|_| measurer.set_outcome(ReconcileOutcome::Error))?;
+                    }
+                    measurer.set_outcome(ReconcileOutcome::Synced);
+                    Ok(Action::requeue(Duration::from_secs(30)))
+                }
+                Err(OperatorError::RdbNotFound(_)) => {
+                    tracing::warn!(
+                        name = %rdb.name_any(),
+                        scaleway_id = %scaleway_id,
+                        "RDB instance not found in Scaleway — will recreate"
+                    );
+                    let status = RdbStatus {
+                        created_at: current_status.created_at,
+                        ..RdbStatus::default()
+                    };
+                    if let Err(patch_err) = update_rdb_status(&rdb, &api, status).await {
+                        tracing::warn!(error = %patch_err, "Failed to clear scaleway_id after RdbNotFound");
+                    }
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    Ok(Action::requeue(Duration::from_secs(30)))
+                }
+                Err(e) => {
+                    tracing::warn!(name = %rdb.name_any(), error = %e, "Failed to sync RDB instance");
+                    record_rdb_error(&rdb, &api, &current_status, &e).await;
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    Err(e)
+                }
+            }
+        }
+
+        RdbReconcileDecision::DeleteInstance { scaleway_id } => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            match get_namespace_client(&ctx, &namespace).await {
+                Ok(ns_client) => {
+                    if let Err(e) = call_scaleway(&ctx, || {
+                        ns_client.delete_rdb_instance(&rdb.spec.region, &scaleway_id)
+                    })
+                    .await
+                    {
+                        tracing::error!(name = %rdb.name_any(), error = %e, "Failed to delete RDB instance");
+                        measurer.set_outcome(ReconcileOutcome::Error);
+                        // Scaleway refuse la suppression, par exemple pendant le provisioning :
+                        // garder le finalizer et revenir, sans backoff croissant.
+                        if is_scaleway_client_error(&e) {
+                            let mut status = current_status;
+                            status.sync_state = "Deleting".to_string();
+                            status.error_message = Some(e.for_status());
+                            let _ = update_rdb_status(&rdb, &api, status).await;
+                            return Ok(Action::requeue(Duration::from_secs(30)));
+                        }
+                        return Err(e);
+                    }
+                }
+                // Erreur passagère de l'API server : retenter plutôt que retirer le
+                // finalizer en laissant l'instance derrière soi.
+                Err(e) if !e.is_permanent_error() => {
+                    measurer.set_outcome(ReconcileOutcome::Error);
+                    return Err(e);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        name = %rdb.name_any(),
+                        scaleway_id = %scaleway_id,
+                        error = %e,
+                        "IAM Secret missing during deletion — skipping Scaleway API call"
+                    );
+                }
+            }
+
+            remove_rdb_finalizer(&rdb, &api)
+                .await
+                .inspect_err(|_| measurer.set_outcome(ReconcileOutcome::Error))?;
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+
+        RdbReconcileDecision::RemoveFinalizer => {
+            let mut measurer = ReconcileMeasurer::new(&ctx.metrics, &ctx.last_reconcile_at);
+            if let Some(scaleway_id) = &current_status.scaleway_id {
+                tracing::info!(
+                    name = %rdb.name_any(),
+                    scaleway_id = %scaleway_id,
+                    "deletion_policy is Retain — leaving the RDB instance in Scaleway"
+                );
+            }
+            remove_rdb_finalizer(&rdb, &api)
+                .await
+                .inspect_err(|_| measurer.set_outcome(ReconcileOutcome::Error))?;
+            measurer.set_outcome(ReconcileOutcome::Deleted);
+            Ok(Action::await_change())
+        }
+    }
+}
+
+/// Adopte l'instance qui porte les tags du CR, ou la crée. Retourne son ID et
+/// `true` si elle a été adoptée.
+///
+/// Le mot de passe n'est lu que s'il faut créer : une instance adoptée a déjà le sien.
+async fn execute_create_rdb(
+    rdb: &Rdb,
+    ctx: &Arc<Context>,
+    namespace: &str,
+    project_id: &str,
+) -> Result<(String, bool)> {
+    let cr_name = rdb.name_any();
+    let ns_client = get_namespace_client(ctx, namespace).await?;
+
+    if let Some(existing_id) = call_scaleway(ctx, || {
+        ns_client.find_rdb_instance_by_tags(&rdb.spec.region, project_id, namespace, &cr_name)
+    })
+    .await?
+    {
+        tracing::warn!(
+            name = %cr_name,
+            scaleway_id = %existing_id,
+            "Adopted existing RDB instance (status write may have failed previously)"
+        );
+        return Ok((existing_id, true));
+    }
+
+    let password = read_rdb_admin_password(rdb, ctx, &ns_client, namespace).await?;
+    let params = RdbCreateParams {
+        name: &cr_name,
+        project_id,
+        engine: &rdb.spec.engine,
+        user_name: &rdb.spec.admin_user,
+        password: &password,
+        node_type: &rdb.spec.node_type,
+        is_ha_cluster: rdb.spec.is_ha_cluster,
+        disable_backup: rdb.spec.disable_backup,
+        volume_type: &rdb.spec.volume_type,
+        volume_size_bytes: rdb_requested_volume_bytes(&rdb.spec),
+        extra_tags: &rdb.spec.tags,
+    };
+    tracing::info!(name = %cr_name, project_id = %project_id, "Creating new RDB instance");
+    let scaleway_id = call_scaleway(ctx, || {
+        ns_client.create_rdb_instance(&rdb.spec.region, &params, namespace, &cr_name)
+    })
+    .await?;
+    Ok((scaleway_id, false))
+}
+
+/// Lit le mot de passe administrateur dans Scaleway Secret Manager, à partir du
+/// ScalewaySecret référencé. `ScalewaySecretNotReady` tant qu'il n'est pas `Synced`.
+async fn read_rdb_admin_password(
+    rdb: &Rdb,
+    ctx: &Arc<Context>,
+    ns_client: &ScalewayClient,
+    namespace: &str,
+) -> Result<String> {
+    let secret_name = &rdb.spec.admin_password_secret_ref.name;
+    let secrets: Api<ScalewaySecret> = Api::namespaced(ctx.client.clone(), namespace);
+    let secret_cr = secrets.get_opt(secret_name).await?.ok_or_else(|| {
+        OperatorError::ScalewaySecretNotReady(format!(
+            "ScalewaySecret '{}' not found in namespace '{}'",
+            secret_name, namespace
+        ))
+    })?;
+    let (secret_id, revision) =
+        synced_secret_version(secret_cr.status.as_ref()).ok_or_else(|| {
+            OperatorError::ScalewaySecretNotReady(format!(
+                "ScalewaySecret '{}' is not Synced yet",
+                secret_name
+            ))
+        })?;
+
+    let payload = call_scaleway(ctx, || {
+        ns_client.access_secret_version(&secret_cr.spec.region, &secret_id, revision)
+    })
+    .await?;
+    String::from_utf8(payload).map_err(|_| {
+        OperatorError::ConfigError(format!(
+            "The value of ScalewaySecret '{}' is not valid UTF-8 and cannot be used as a password.",
+            secret_name
+        ))
+    })
+}
+
+/// Émet un Event Warning sur le CR. Un échec est journalisé sans interrompre le
+/// reconcile : le constat reste dans `status.drift_message`.
+async fn publish_rdb_drift_event(ctx: &Arc<Context>, rdb: &Rdb, drift: &str) {
+    let recorder = Recorder::new(
+        ctx.client.clone(),
+        Reporter {
+            controller: "scaleway-operator".into(),
+            instance: None,
+        },
+    );
+    let event = Event {
+        type_: EventType::Warning,
+        reason: "SpecDrift".into(),
+        note: Some(drift.to_string()),
+        action: "Sync".into(),
+        secondary: None,
+    };
+    if let Err(e) = recorder.publish(&event, &rdb.object_ref(&())).await {
+        tracing::warn!(name = %rdb.name_any(), error = %e, "Failed to publish drift event");
+    }
+}
+
+/// Pose `Error` et le message de `error` sur le status, sans toucher aux autres champs.
+async fn record_rdb_error(
+    rdb: &Rdb,
+    api: &Api<Rdb>,
+    current_status: &RdbStatus,
+    error: &OperatorError,
+) {
+    let mut status = current_status.clone();
+    status.error_message = Some(error.for_status());
+    status.sync_state = "Error".to_string();
+    let _ = update_rdb_status(rdb, api, status).await;
+}
+
+async fn patch_rdb_finalizers(rdb: &Rdb, api: &Api<Rdb>, finalizers: Vec<String>) -> Result<()> {
+    let patch = serde_json::json!({ "metadata": { "finalizers": finalizers } });
+    api.patch(
+        &rdb.name_any(),
+        &PatchParams::default(),
+        &Patch::Merge(patch),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn remove_rdb_finalizer(rdb: &Rdb, api: &Api<Rdb>) -> Result<()> {
+    let finalizers = rdb
+        .metadata
+        .finalizers
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f != RDB_FINALIZER)
+        .collect();
+    patch_rdb_finalizers(rdb, api, finalizers).await
+}
+
+async fn update_rdb_status(rdb: &Rdb, api: &Api<Rdb>, status: RdbStatus) -> Result<()> {
+    let patch = serde_json::json!({ "status": status });
+    api.patch_status(
+        &rdb.name_any(),
         &PatchParams::default(),
         &Patch::Merge(patch),
     )
@@ -4080,5 +4703,325 @@ mod tests {
         ];
         assert_eq!(find_reserved_tag(&tags), None);
         assert_eq!(find_reserved_tag(&[]), None);
+    }
+
+    // ── RDB ──────────────────────────────────────────────────────────────────
+
+    fn base_rdb_input() -> RdbReconcileInput {
+        RdbReconcileInput {
+            deletion_requested: false,
+            circuit_open: false,
+            finalizer_present: true,
+            role_allows_write: true,
+            retain_on_delete: false,
+            scaleway_id: None,
+        }
+    }
+
+    #[test]
+    fn test_rdb_decide_no_scaleway_id_creates() {
+        assert_eq!(
+            decide_next_action_rdb(&base_rdb_input()),
+            RdbReconcileDecision::CreateInstance
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_known_instance_syncs_even_with_read_only_role() {
+        let input = RdbReconcileInput {
+            scaleway_id: Some("rdb-1".to_string()),
+            role_allows_write: false,
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::SyncInstance {
+                scaleway_id: "rdb-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_read_only_role_blocks_creation() {
+        let input = RdbReconcileInput {
+            role_allows_write: false,
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::BlockReadOnlyRole
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_finalizer_added_before_role_check() {
+        let input = RdbReconcileInput {
+            finalizer_present: false,
+            role_allows_write: false,
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::AddFinalizer
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_circuit_open_skips() {
+        let input = RdbReconcileInput {
+            circuit_open: true,
+            scaleway_id: Some("rdb-1".to_string()),
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::SkipCircuitOpen
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_deletion_deletes_and_takes_priority_over_circuit_open() {
+        let input = RdbReconcileInput {
+            deletion_requested: true,
+            circuit_open: true,
+            scaleway_id: Some("rdb-1".to_string()),
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::DeleteInstance {
+                scaleway_id: "rdb-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_deletion_with_retain_only_removes_finalizer() {
+        let input = RdbReconcileInput {
+            deletion_requested: true,
+            retain_on_delete: true,
+            scaleway_id: Some("rdb-1".to_string()),
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::RemoveFinalizer
+        );
+    }
+
+    #[test]
+    fn test_rdb_decide_deletion_without_instance_removes_finalizer() {
+        let input = RdbReconcileInput {
+            deletion_requested: true,
+            ..base_rdb_input()
+        };
+        assert_eq!(
+            decide_next_action_rdb(&input),
+            RdbReconcileDecision::RemoveFinalizer
+        );
+    }
+
+    fn rdb_spec() -> RdbSpec {
+        RdbSpec {
+            region: "fr-par".to_string(),
+            engine: "PostgreSQL-16".to_string(),
+            node_type: "DB-DEV-S".to_string(),
+            admin_user: "admin".to_string(),
+            admin_password_secret_ref: crate::resources::ScalewaySecretRef {
+                name: "db-password".to_string(),
+            },
+            volume_size_gb: Some(20),
+            volume_type: "bssd".to_string(),
+            is_ha_cluster: false,
+            disable_backup: false,
+            tags: vec![],
+            deletion_policy: DeletionPolicy::Delete,
+        }
+    }
+
+    fn rdb_info() -> RdbInstanceInfo {
+        RdbInstanceInfo {
+            id: "rdb-1".to_string(),
+            state: "ready".to_string(),
+            engine: Some("PostgreSQL-16".to_string()),
+            node_type: Some("DB-DEV-S".to_string()),
+            is_ha_cluster: Some(false),
+            volume_size_bytes: Some(20 * BYTES_PER_GB),
+            endpoint_ip: Some("51.158.1.2".to_string()),
+            endpoint_port: Some(5432),
+        }
+    }
+
+    #[test]
+    fn test_rdb_requested_volume_is_left_to_scaleway_for_lssd() {
+        let mut spec = rdb_spec();
+        assert_eq!(rdb_requested_volume_bytes(&spec), Some(20_000_000_000));
+        spec.volume_type = "lssd".to_string();
+        assert_eq!(rdb_requested_volume_bytes(&spec), None);
+        spec.volume_type = "bssd".to_string();
+        spec.volume_size_gb = None;
+        assert_eq!(rdb_requested_volume_bytes(&spec), None);
+    }
+
+    #[test]
+    fn test_rdb_no_drift_when_instance_matches_spec() {
+        assert_eq!(rdb_mutable_drift(&rdb_spec(), &rdb_info()), None);
+        assert_eq!(rdb_engine_drift(&rdb_spec(), &rdb_info()), None);
+    }
+
+    #[test]
+    fn test_rdb_mutable_drift_lists_every_divergent_field() {
+        let info = RdbInstanceInfo {
+            node_type: Some("DB-DEV-M".to_string()),
+            is_ha_cluster: Some(true),
+            volume_size_bytes: Some(50 * BYTES_PER_GB),
+            ..rdb_info()
+        };
+
+        let drift = rdb_mutable_drift(&rdb_spec(), &info).expect("a drift");
+
+        assert_eq!(
+            drift,
+            "node_type: spec 'DB-DEV-S', Scaleway 'DB-DEV-M'; \
+             is_ha_cluster: spec false, Scaleway true; \
+             volume_size_gb: spec 20, Scaleway 50"
+        );
+    }
+
+    #[test]
+    fn test_rdb_mutable_drift_ignores_volume_size_on_lssd_and_unknown_fields() {
+        let mut spec = rdb_spec();
+        spec.volume_type = "lssd".to_string();
+        let info = RdbInstanceInfo {
+            node_type: None,
+            is_ha_cluster: None,
+            volume_size_bytes: Some(5 * BYTES_PER_GB),
+            ..rdb_info()
+        };
+        assert_eq!(rdb_mutable_drift(&spec, &info), None);
+    }
+
+    #[test]
+    fn test_rdb_synced_status_ready_instance_is_synced() {
+        let current = RdbStatus {
+            scaleway_id: Some("rdb-1".to_string()),
+            sync_state: "Error".to_string(),
+            error_message: Some("Scaleway API error: 500".to_string()),
+            ..RdbStatus::default()
+        };
+
+        let status = build_rdb_synced_status(&current, &rdb_spec(), &rdb_info(), "proj-x");
+
+        assert_eq!(status.sync_state, "Synced");
+        // Une erreur passée ne survit pas à une synchro réussie.
+        assert_eq!(status.error_message, None);
+        assert_eq!(status.drift_message, None);
+        assert_eq!(status.state, "ready");
+        assert_eq!(status.endpoint_ip.as_deref(), Some("51.158.1.2"));
+        assert_eq!(status.endpoint_port, Some(5432));
+        assert_eq!(status.engine.as_deref(), Some("PostgreSQL-16"));
+        assert_eq!(status.project_id.as_deref(), Some("proj-x"));
+        assert_eq!(status.scaleway_id.as_deref(), Some("rdb-1"));
+    }
+
+    #[test]
+    fn test_rdb_synced_status_transient_state_is_syncing() {
+        let info = RdbInstanceInfo {
+            state: "provisioning".to_string(),
+            endpoint_ip: None,
+            endpoint_port: None,
+            ..rdb_info()
+        };
+
+        let status = build_rdb_synced_status(&RdbStatus::default(), &rdb_spec(), &info, "proj-x");
+
+        assert_eq!(status.sync_state, "Syncing");
+        assert_eq!(status.endpoint_ip, None);
+    }
+
+    #[test]
+    fn test_rdb_synced_status_mutable_drift_stays_synced() {
+        let info = RdbInstanceInfo {
+            node_type: Some("DB-DEV-M".to_string()),
+            ..rdb_info()
+        };
+
+        let status = build_rdb_synced_status(&RdbStatus::default(), &rdb_spec(), &info, "proj-x");
+
+        assert_eq!(status.sync_state, "Synced");
+        assert_eq!(status.error_message, None);
+        assert_eq!(
+            status.drift_message.as_deref(),
+            Some("node_type: spec 'DB-DEV-S', Scaleway 'DB-DEV-M'")
+        );
+    }
+
+    #[test]
+    fn test_rdb_synced_status_engine_drift_is_config_drift() {
+        let info = RdbInstanceInfo {
+            engine: Some("PostgreSQL-17".to_string()),
+            ..rdb_info()
+        };
+
+        let status = build_rdb_synced_status(&RdbStatus::default(), &rdb_spec(), &info, "proj-x");
+
+        assert_eq!(status.sync_state, "ConfigDrift");
+        let message = status.error_message.expect("an explicit message");
+        assert!(message.contains("PostgreSQL-16"), "got: {message}");
+        assert!(message.contains("PostgreSQL-17"), "got: {message}");
+        assert_eq!(status.engine.as_deref(), Some("PostgreSQL-17"));
+    }
+
+    #[test]
+    fn test_drift_event_only_when_drift_appears_or_changes() {
+        assert!(should_emit_drift_event(None, Some("a")));
+        assert!(should_emit_drift_event(Some("a"), Some("b")));
+        assert!(!should_emit_drift_event(Some("a"), Some("a")));
+        assert!(!should_emit_drift_event(Some("a"), None));
+        assert!(!should_emit_drift_event(None, None));
+    }
+
+    #[test]
+    fn test_synced_secret_version_requires_synced_state_and_both_ids() {
+        let synced = ScalewaySecretStatus {
+            scaleway_id: Some("sec-1".to_string()),
+            current_version: Some(3),
+            sync_state: "Synced".to_string(),
+            ..ScalewaySecretStatus::default()
+        };
+        assert_eq!(
+            synced_secret_version(Some(&synced)),
+            Some(("sec-1".to_string(), 3))
+        );
+        assert_eq!(synced_secret_version(None), None);
+        for state in ["Syncing", "Error", "Revoked"] {
+            let status = ScalewaySecretStatus {
+                sync_state: state.to_string(),
+                ..synced.clone()
+            };
+            assert_eq!(synced_secret_version(Some(&status)), None, "{state}");
+        }
+        let without_version = ScalewaySecretStatus {
+            current_version: None,
+            ..synced
+        };
+        assert_eq!(synced_secret_version(Some(&without_version)), None);
+    }
+
+    #[test]
+    fn test_scaleway_client_error_covers_4xx_only() {
+        let refused = OperatorError::ScalewayError {
+            status: "409 Conflict".to_string(),
+            message: String::new(),
+        };
+        let outage = OperatorError::ScalewayError {
+            status: "503 Service Unavailable".to_string(),
+            message: String::new(),
+        };
+        assert!(is_scaleway_client_error(&refused));
+        assert!(!is_scaleway_client_error(&outage));
+        assert!(!is_scaleway_client_error(
+            &OperatorError::CircuitBreakerOpen
+        ));
     }
 }

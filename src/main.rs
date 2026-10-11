@@ -4,9 +4,10 @@ use kube::{Api, Client};
 use scaleway_operator::{
     context::{CircuitBreakerState, Context},
     reconcilers::{
-        error_policy, reconcile_instance, reconcile_load_balancer, reconcile_scaleway_secret,
+        error_policy, reconcile_instance, reconcile_load_balancer, reconcile_rdb,
+        reconcile_scaleway_secret,
     },
-    resources::{Instance, LoadBalancer, ScalewaySecret},
+    resources::{Instance, LoadBalancer, Rdb, ScalewaySecret},
     scaleway::ScalewayClient,
     server::run_axum_server,
 };
@@ -76,7 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let instance_api = Api::<Instance>::all(client.clone());
     let lb_api = Api::<LoadBalancer>::all(client.clone());
-    let secret_api = Api::<ScalewaySecret>::all(client);
+    let secret_api = Api::<ScalewaySecret>::all(client.clone());
+    let rdb_api = Api::<Rdb>::all(client);
 
     let instance_ctrl = Controller::new(instance_api, Default::default())
         .run(
@@ -114,7 +116,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-    tokio::join!(instance_ctrl, lb_ctrl, secret_ctrl);
+    let rdb_ctrl = Controller::new(rdb_api, Default::default())
+        .run(
+            reconcile_rdb,
+            |obj, err, ctx| error_policy("rdb", obj, err, ctx),
+            Arc::clone(&context),
+        )
+        .for_each(|res| async move {
+            if let Err(e) = res {
+                tracing::error!(error = %e, "RDB reconciliation failed");
+            }
+        });
+
+    tokio::join!(instance_ctrl, lb_ctrl, secret_ctrl, rdb_ctrl);
 
     Ok(())
 }

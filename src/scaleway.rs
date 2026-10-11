@@ -718,6 +718,244 @@ impl ScalewayClient {
 
     // ============== Validation ==============
 
+    /// Reads the payload of one version of a Scaleway secret.
+    pub async fn access_secret_version(
+        &self,
+        region: &str,
+        secret_id: &str,
+        revision: u32,
+    ) -> Result<Vec<u8>> {
+        let url = format!(
+            "{}/secret-manager/v1beta1/regions/{}/secrets/{}/versions/{}/access",
+            self.base_url, region, secret_id, revision
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        let encoded = data["data"].as_str().ok_or_else(|| {
+            OperatorError::Unknown("No data in access_secret_version response".to_string())
+        })?;
+        BASE64.decode(encoded).map_err(|_| {
+            OperatorError::Unknown("Secret version payload is not valid base64".to_string())
+        })
+    }
+
+    // ============== RDB Operations ==============
+
+    /// Creates a Database Instance tagged with the operator tags of its CR.
+    /// Returns the ID of the new instance.
+    pub async fn create_rdb_instance(
+        &self,
+        region: &str,
+        params: &RdbCreateParams<'_>,
+        namespace: &str,
+        cr_name: &str,
+    ) -> Result<String> {
+        let mut tags = Self::secret_operator_tags(namespace, cr_name);
+        tags.extend(params.extra_tags.iter().cloned());
+
+        let mut body = json!({
+            "name": params.name,
+            "project_id": params.project_id,
+            "engine": params.engine,
+            "user_name": params.user_name,
+            "password": params.password,
+            "node_type": params.node_type,
+            "is_ha_cluster": params.is_ha_cluster,
+            "disable_backup": params.disable_backup,
+            "volume_type": params.volume_type,
+            "tags": tags,
+        });
+        if let Some(size) = params.volume_size_bytes {
+            body["volume_size"] = json!(size);
+        }
+
+        let url = format!("{}/rdb/v1/regions/{}/instances", self.base_url, region);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Auth-Token", &self.token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["id"]
+            .as_str()
+            .ok_or_else(|| OperatorError::Unknown("No instance ID in response".to_string()))?
+            .to_string())
+    }
+
+    /// Searches for a Database Instance by operator tags. Returns its ID, or None.
+    /// More than one match is an error: adopting either one could be wrong.
+    pub async fn find_rdb_instance_by_tags(
+        &self,
+        region: &str,
+        project_id: &str,
+        namespace: &str,
+        cr_name: &str,
+    ) -> Result<Option<String>> {
+        let tags = Self::secret_operator_tags(namespace, cr_name);
+
+        let url = format!("{}/rdb/v1/regions/{}/instances", self.base_url, region);
+
+        let response = self
+            .http_client
+            .get(&url)
+            .query(&[("project_id", project_id)])
+            .query(
+                &tags
+                    .iter()
+                    .map(|t| ("tags", t.as_str()))
+                    .collect::<Vec<_>>(),
+            )
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let error_text = response.text().await?;
+            return Err(OperatorError::ScalewayError {
+                status: status_code.to_string(),
+                message: error_text,
+            });
+        }
+
+        let data: Value = response.json().await?;
+        let ids: Vec<&str> = data["instances"]
+            .as_array()
+            .map(|instances| instances.iter().filter_map(|i| i["id"].as_str()).collect())
+            .unwrap_or_default();
+
+        match ids.as_slice() {
+            [] => Ok(None),
+            [id] => Ok(Some(id.to_string())),
+            _ => Err(OperatorError::ConfigError(format!(
+                "{} Database Instances carry the operator tags of '{}/{}'. \
+                 Remove the tags from all but one.",
+                ids.len(),
+                namespace,
+                cr_name
+            ))),
+        }
+    }
+
+    pub async fn get_rdb_instance(
+        &self,
+        region: &str,
+        instance_id: &str,
+    ) -> Result<RdbInstanceInfo> {
+        let url = format!(
+            "{}/rdb/v1/regions/{}/instances/{}",
+            self.base_url, region, instance_id
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => {}
+            reqwest::StatusCode::NOT_FOUND => {
+                return Err(OperatorError::RdbNotFound(instance_id.to_string()));
+            }
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                return Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                });
+            }
+        }
+
+        let data: Value = response.json().await?;
+        let id = data["id"]
+            .as_str()
+            .ok_or_else(|| OperatorError::Unknown("Missing instance.id in response".to_string()))?
+            .to_string();
+
+        // `endpoint` (objet unique) est déprécié : seul le tableau `endpoints` est lu.
+        // Le point d'accès public (load balancer) passe avant un réseau privé.
+        let endpoints = data["endpoints"].as_array();
+        let endpoint = endpoints
+            .and_then(|eps| eps.iter().find(|ep| !ep["load_balancer"].is_null()))
+            .or_else(|| endpoints.and_then(|eps| eps.first()));
+
+        Ok(RdbInstanceInfo {
+            id,
+            state: data["status"].as_str().unwrap_or("unknown").to_string(),
+            engine: data["engine"].as_str().map(|s| s.to_string()),
+            node_type: data["node_type"].as_str().map(|s| s.to_string()),
+            is_ha_cluster: data["is_ha_cluster"].as_bool(),
+            volume_size_bytes: data["volume"]["size"].as_u64(),
+            endpoint_ip: endpoint
+                .and_then(|ep| ep["ip"].as_str())
+                .map(|s| s.to_string()),
+            endpoint_port: endpoint
+                .and_then(|ep| ep["port"].as_u64())
+                .and_then(|p| u16::try_from(p).ok()),
+        })
+    }
+
+    /// Deletes a Database Instance and its data. Idempotent — 404 is treated
+    /// as success (instance already gone).
+    pub async fn delete_rdb_instance(&self, region: &str, instance_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/rdb/v1/regions/{}/instances/{}",
+            self.base_url, region, instance_id
+        );
+
+        let response = self
+            .http_client
+            .delete(&url)
+            .header("X-Auth-Token", &self.token)
+            .send()
+            .await?;
+
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            reqwest::StatusCode::NOT_FOUND => Ok(()),
+            s => {
+                let status_code = s;
+                let error_text = response.text().await?;
+                Err(OperatorError::ScalewayError {
+                    status: status_code.to_string(),
+                    message: error_text,
+                })
+            }
+        }
+    }
+
     pub async fn validate_zone(&self, zone: &str) -> Result<()> {
         // Zones valides Scaleway
         let valid_zones = [
@@ -782,6 +1020,34 @@ pub struct InstanceInfo {
     pub public_ip: Option<String>,
     #[allow(dead_code)]
     pub created_at: Option<String>,
+}
+
+/// Paramètres de création d'une instance RDB, résolus par le reconciler.
+pub struct RdbCreateParams<'a> {
+    pub name: &'a str,
+    pub project_id: &'a str,
+    pub engine: &'a str,
+    pub user_name: &'a str,
+    pub password: &'a str,
+    pub node_type: &'a str,
+    pub is_ha_cluster: bool,
+    pub disable_backup: bool,
+    pub volume_type: &'a str,
+    /// `None` laisse Scaleway choisir : la taille d'un volume `lssd` dépend du nœud.
+    pub volume_size_bytes: Option<u64>,
+    pub extra_tags: &'a [String],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RdbInstanceInfo {
+    pub id: String,
+    pub state: String,
+    pub engine: Option<String>,
+    pub node_type: Option<String>,
+    pub is_ha_cluster: Option<bool>,
+    pub volume_size_bytes: Option<u64>,
+    pub endpoint_ip: Option<String>,
+    pub endpoint_port: Option<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -1818,5 +2084,346 @@ mod tests {
             ),
             "500 doit être un ScalewayError (transitoire), pas ProjectAccessDenied (permanent)"
         );
+    }
+
+    // ── RDB ──────────────────────────────────────────────────────────────────
+
+    const RDB_PATH: &str = "/rdb/v1/regions/fr-par/instances";
+
+    fn rdb_params<'a>(tags: &'a [String], volume_size_bytes: Option<u64>) -> RdbCreateParams<'a> {
+        RdbCreateParams {
+            name: "my-postgres",
+            project_id: "proj-x",
+            engine: "PostgreSQL-16",
+            user_name: "admin",
+            password: "S3cret!pass",
+            node_type: "DB-DEV-S",
+            is_ha_cluster: false,
+            disable_backup: false,
+            volume_type: "bssd",
+            volume_size_bytes,
+            extra_tags: tags,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rdb_instance_sends_operator_tags_and_volume_size() {
+        let mut server = mockito::Server::new_async().await;
+        let create = server
+            .mock("POST", RDB_PATH)
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "name": "my-postgres",
+                "project_id": "proj-x",
+                "engine": "PostgreSQL-16",
+                "user_name": "admin",
+                "password": "S3cret!pass",
+                "node_type": "DB-DEV-S",
+                "volume_type": "bssd",
+                "volume_size": 20_000_000_000u64,
+                "tags": [
+                    "managed-by=scaleway-operator",
+                    "scaleway-operator-cr-namespace=ns",
+                    "scaleway-operator-cr-name=cr",
+                    "team=payments"
+                ],
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "rdb-new"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let tags = vec!["team=payments".to_string()];
+        let result = client
+            .create_rdb_instance(
+                "fr-par",
+                &rdb_params(&tags, Some(20_000_000_000)),
+                "ns",
+                "cr",
+            )
+            .await;
+
+        assert_eq!(result.unwrap(), "rdb-new");
+        create.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_rdb_instance_omits_volume_size_when_unset() {
+        let mut server = mockito::Server::new_async().await;
+        let create = server
+            .mock("POST", RDB_PATH)
+            .match_body(mockito::Matcher::Regex("volume_size".to_string()))
+            .expect(0)
+            .create_async()
+            .await;
+        server
+            .mock("POST", RDB_PATH)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "rdb-new"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_rdb_instance("fr-par", &rdb_params(&[], None), "ns", "cr")
+            .await;
+
+        assert_eq!(result.unwrap(), "rdb-new");
+        create.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_rdb_instance_400_returns_scaleway_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", RDB_PATH)
+            .with_status(400)
+            .with_body(r#"{"message": "password does not respect the policy"}"#)
+            .create_async()
+            .await;
+
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+        let result = client
+            .create_rdb_instance("fr-par", &rdb_params(&[], None), "ns", "cr")
+            .await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+    }
+
+    async fn rdb_list_server(body: &str) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", RDB_PATH)
+            // Chaque tag part dans son propre paramètre `tags`.
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("project_id=proj-x".into()),
+                mockito::Matcher::Regex("tags=managed-by%3Dscaleway-operator".into()),
+                mockito::Matcher::Regex("tags=scaleway-operator-cr-namespace%3Dns".into()),
+                mockito::Matcher::Regex("tags=scaleway-operator-cr-name%3Dcr".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn test_find_rdb_instance_by_tags_found() {
+        let server = rdb_list_server(r#"{"instances": [{"id": "rdb-1"}], "total_count": 1}"#).await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client
+            .find_rdb_instance_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        assert_eq!(result.unwrap(), Some("rdb-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_find_rdb_instance_by_tags_empty() {
+        let server = rdb_list_server(r#"{"instances": [], "total_count": 0}"#).await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client
+            .find_rdb_instance_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_find_rdb_instance_by_tags_several_matches_is_permanent_error() {
+        let server = rdb_list_server(
+            r#"{"instances": [{"id": "rdb-1"}, {"id": "rdb-2"}], "total_count": 2}"#,
+        )
+        .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let err = client
+            .find_rdb_instance_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await
+            .expect_err("two matches must not be adopted");
+
+        assert!(matches!(err, OperatorError::ConfigError(_)), "got: {err:?}");
+        assert!(err.is_permanent_error());
+    }
+
+    #[tokio::test]
+    async fn test_find_rdb_instance_by_tags_500_returns_err() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", RDB_PATH)
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .with_body("boom")
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client
+            .find_rdb_instance_by_tags("fr-par", "proj-x", "ns", "cr")
+            .await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_get_rdb_instance_prefers_the_public_endpoint() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", format!("{RDB_PATH}/rdb-1").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "id": "rdb-1",
+                    "status": "ready",
+                    "engine": "PostgreSQL-16",
+                    "node_type": "DB-DEV-S",
+                    "is_ha_cluster": false,
+                    "volume": {"type": "bssd", "size": 20000000000},
+                    "endpoints": [
+                        {"ip": "10.0.0.4", "port": 5432, "private_network": {"private_network_id": "pn-1"}},
+                        {"ip": "51.158.1.2", "port": 12345, "load_balancer": {}}
+                    ]
+                }"#,
+            )
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let info = client.get_rdb_instance("fr-par", "rdb-1").await.unwrap();
+
+        assert_eq!(
+            info,
+            RdbInstanceInfo {
+                id: "rdb-1".to_string(),
+                state: "ready".to_string(),
+                engine: Some("PostgreSQL-16".to_string()),
+                node_type: Some("DB-DEV-S".to_string()),
+                is_ha_cluster: Some(false),
+                volume_size_bytes: Some(20_000_000_000),
+                endpoint_ip: Some("51.158.1.2".to_string()),
+                endpoint_port: Some(12345),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_rdb_instance_without_endpoint_while_provisioning() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", format!("{RDB_PATH}/rdb-1").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": "rdb-1", "status": "provisioning", "endpoints": []}"#)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let info = client.get_rdb_instance("fr-par", "rdb-1").await.unwrap();
+
+        assert_eq!(info.state, "provisioning");
+        assert_eq!(info.endpoint_ip, None);
+        assert_eq!(info.endpoint_port, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_rdb_instance_404_returns_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", format!("{RDB_PATH}/rdb-gone").as_str())
+            .with_status(404)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client.get_rdb_instance("fr-par", "rdb-gone").await;
+
+        assert!(matches!(result, Err(OperatorError::RdbNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_delete_rdb_instance_success_and_404_are_ok() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("DELETE", format!("{RDB_PATH}/rdb-1").as_str())
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+        server
+            .mock("DELETE", format!("{RDB_PATH}/rdb-gone").as_str())
+            .with_status(404)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        assert!(client.delete_rdb_instance("fr-par", "rdb-1").await.is_ok());
+        assert!(client
+            .delete_rdb_instance("fr-par", "rdb-gone")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_rdb_instance_409_returns_scaleway_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("DELETE", format!("{RDB_PATH}/rdb-1").as_str())
+            .with_status(409)
+            .with_body(r#"{"message": "resource is in a transient state"}"#)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client.delete_rdb_instance("fr-par", "rdb-1").await;
+
+        assert!(
+            matches!(result, Err(OperatorError::ScalewayError { ref status, .. }) if status.starts_with("409"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_access_secret_version_decodes_the_payload() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-1/versions/3/access",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"secret_id": "sec-1", "revision": 3, "data": "UzNjcmV0IXBhc3M="}"#)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let payload = client.access_secret_version("fr-par", "sec-1", 3).await;
+
+        assert_eq!(payload.unwrap(), b"S3cret!pass".to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_access_secret_version_403_returns_scaleway_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock(
+                "GET",
+                "/secret-manager/v1beta1/regions/fr-par/secrets/sec-1/versions/3/access",
+            )
+            .with_status(403)
+            .with_body(r#"{"message": "insufficient permissions"}"#)
+            .create_async()
+            .await;
+        let client = ScalewayClient::new_with_base_url("tok".into(), server.url());
+
+        let result = client.access_secret_version("fr-par", "sec-1", 3).await;
+
+        assert!(matches!(result, Err(OperatorError::ScalewayError { .. })));
     }
 }

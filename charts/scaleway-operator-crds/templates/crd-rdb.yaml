@@ -1,0 +1,174 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: rdbs.scaleway.mathieubodin.io
+  annotations:
+    helm.sh/resource-policy: keep
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+  labels:
+    io.mathieubodin.scaleway.k8s.crd.schema.version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  group: scaleway.mathieubodin.io
+  names:
+    categories: []
+    kind: RDB
+    plural: rdbs
+    shortNames: []
+    singular: rdb
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.scaleway_id
+      name: Scaleway ID
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.endpoint_ip
+      name: Endpoint
+      type: string
+    - jsonPath: .status.sync_state
+      name: Sync
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for RdbSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              admin_password_secret_ref:
+                description: |-
+                  ScalewaySecret qui porte le mot de passe administrateur. Lu une seule fois,
+                  à la création de l'instance.
+                properties:
+                  name:
+                    description: Nom du CR ScalewaySecret
+                    type: string
+                required:
+                - name
+                type: object
+              admin_user:
+                description: Utilisateur administrateur créé avec l'instance. Immuable.
+                type: string
+                x-kubernetes-validations:
+                - message: spec.admin_user is immutable
+                  rule: self == oldSelf
+              deletion_policy:
+                default: Delete
+                description: Sort de l'instance Scaleway à la suppression du CR (Delete ou Retain)
+                enum:
+                - Delete
+                - Retain
+                type: string
+              disable_backup:
+                default: false
+                description: Désactive les sauvegardes automatiques
+                type: boolean
+              engine:
+                description: Moteur et version (PostgreSQL-16, MySQL-8, etc.)
+                type: string
+              is_ha_cluster:
+                default: false
+                description: Haute disponibilité
+                type: boolean
+              node_type:
+                description: Type de nœud (DB-DEV-S, DB-GP-XS, etc.)
+                type: string
+              region:
+                description: |-
+                  Région Scaleway (fr-par, nl-ams, pl-waw). Immuable : l'opérateur ne déplace pas
+                  une instance d'une région à l'autre.
+                type: string
+                x-kubernetes-validations:
+                - message: spec.region is immutable
+                  rule: self == oldSelf
+              tags:
+                default: []
+                description: Tags supplémentaires (en plus des tags operator injectés à la création)
+                items:
+                  type: string
+                type: array
+              volume_size_gb:
+                description: |-
+                  Taille du volume en Go. Sans effet avec un volume `lssd`, dont la taille
+                  dépend du type de nœud.
+                format: uint32
+                minimum: 0.0
+                nullable: true
+                type: integer
+              volume_type:
+                default: lssd
+                description: Type de volume (lssd, bssd, sbs_5k, sbs_15k)
+                type: string
+            required:
+            - admin_password_secret_ref
+            - admin_user
+            - engine
+            - node_type
+            - region
+            type: object
+          status:
+            nullable: true
+            properties:
+              created_at:
+                description: Timestamp de création
+                format: date-time
+                nullable: true
+                type: string
+              drift_message:
+                description: |-
+                  Écart entre le spec et l'instance sur un champ modifiable (node_type, HA, volume).
+                  L'opérateur le signale sans le corriger.
+                nullable: true
+                type: string
+              endpoint_ip:
+                description: Adresse IP du point d'accès
+                nullable: true
+                type: string
+              endpoint_port:
+                description: Port du point d'accès
+                format: uint16
+                maximum: 65535.0
+                minimum: 0.0
+                nullable: true
+                type: integer
+              engine:
+                description: Moteur réellement porté par l'instance
+                nullable: true
+                type: string
+              error_message:
+                description: Message d'erreur si applicable
+                nullable: true
+                type: string
+              node_type:
+                description: Type de nœud réellement porté par l'instance
+                nullable: true
+                type: string
+              project_id:
+                description: ID du projet Scaleway (pour tracking)
+                nullable: true
+                type: string
+              scaleway_id:
+                description: ID Scaleway de l'instance
+                nullable: true
+                type: string
+              state:
+                default: ''
+                description: État de l'instance côté Scaleway (provisioning, ready, error, etc.)
+                type: string
+              sync_state:
+                default: ''
+                description: État de la synchronisation (Pending, Syncing, Synced, ConfigDrift, Error, Deleting)
+                type: string
+            type: object
+        required:
+        - spec
+        title: Rdb
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

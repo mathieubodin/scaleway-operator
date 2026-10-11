@@ -24,10 +24,10 @@ metadata:
 rules:
 # CRDs Scaleway
 - apiGroups: ["scaleway.mathieubodin.io"]
-  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status"]
+  resources: ["instances", "instances/status", "projects", "projects/status", "loadbalancers", "loadbalancers/status", "scalewaysecrets", "scalewaysecrets/status", "rdbs", "rdbs/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["scaleway.mathieubodin.io"]
-  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers"]
+  resources: ["instances/finalizers", "projects/finalizers", "loadbalancers/finalizers", "scalewaysecrets/finalizers", "rdbs/finalizers"]
   verbs: ["update"]
 # NamespaceRole (cluster-wide resource)
 - apiGroups: ["scaleway.mathieubodin.io"]
@@ -42,7 +42,7 @@ rules:
   resources: ["namespaces"]
   verbs: ["get", "list", "watch"]
 # Logging des événements
-- apiGroups: [""]
+- apiGroups: ["", "events.k8s.io"]
   resources: ["events"]
   verbs: ["create", "patch"]
 
