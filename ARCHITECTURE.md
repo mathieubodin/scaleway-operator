@@ -184,7 +184,8 @@ Chaque namespace qui héberge des ressources de l'opérateur doit avoir :
 |Catégorie|Variants|Comportement|
 |---|---|---|
 |**Permanente**|`ConfigError`, `InvalidZone`, `InvalidInstanceType`, `InvalidLbType`, `ProjectAccessDenied`, `SecretSourceNotConfigured`, `SecretOptInMissing`, `SecretKeyNotFound`, `SecretAccessDenied`|`Action::await_change()` — pas de retry, attend une modification du CR|
-|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `RdbNotFound`, `ScalewaySecretNotReady`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
+|**Transitoire**|`ScalewayError`, `KubeError`, `NetworkError`, `SecretNotFound`, `RdbNotFound`, `Unknown`|Backoff exponentiel : 30s → 60s → 120s → 240s → 300s max|
+|**Transitoire, à délai fixe**|`ScalewaySecretNotReady`|Revérifiée toutes les 30 secondes, sans backoff|
 
 **Revérification :** `SecretOptInMissing`, `SecretKeyNotFound` et `SecretAccessDenied` sont permanentes mais se corrigent
 sur le Secret source ou son RBAC, que le controller ne surveille pas. `error_policy` les revérifie toutes les 5 minutes

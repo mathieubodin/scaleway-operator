@@ -132,9 +132,10 @@ impl OperatorError {
         )
     }
 
-    /// Délai avant de revérifier une erreur permanente dont la correction ne passe pas par
-    /// le CR : le Secret source ou son RBAC. Le controller ne surveille pas les Secrets,
-    /// donc sans revérification la correction ne serait jamais vue.
+    /// Délai fixe avant de revérifier une erreur dont la résolution ne passe pas par le CR :
+    /// le Secret source ou son RBAC (permanentes), ou un ScalewaySecret attendu (transitoire).
+    /// Le controller ne surveille pas ces objets, donc sans revérification leur changement
+    /// ne serait jamais vu, ou trop tard.
     pub fn recheck_interval(&self) -> Option<Duration> {
         match self {
             OperatorError::SecretOptInMissing(_)
@@ -153,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_recheck_interval_only_for_source_side_errors() {
+    fn test_recheck_interval_for_source_side_errors() {
         for err in [
             OperatorError::SecretOptInMissing("x".to_string()),
             OperatorError::SecretKeyNotFound("x".to_string()),
